@@ -478,7 +478,7 @@ export default function SalesTracker() {
 
   // Render
   return (
-    <div className="p-0 max-w-7xl mx-auto dark:bg-gray-900 dark:text-white mt-24">
+    <div className="p-0 max-w-7xl mx-auto dark:bg-gray-900 dark:text-white">
       <DynamiclowStockAlert/>
       
       {/* Header */}

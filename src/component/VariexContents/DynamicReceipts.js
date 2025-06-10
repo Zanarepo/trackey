@@ -118,61 +118,69 @@ export default function ReceiptManager() {
       });
   }, [storeId]);
 
+ 
+ 
   useEffect(() => {
-    if (!selectedSaleGroup) {
-      setReceipts([]);
-      return;
-    }
-    (async () => {
-      let { data: receiptData } = await supabase
+  if (!selectedSaleGroup) {
+    setReceipts([]);
+    return;
+  }
+  (async () => {
+    let { data: receiptData } = await supabase
+      .from("receipts")
+      .select("*")
+      .eq("sale_group_id", selectedSaleGroup.id)
+      .order('id', { ascending: false });
+
+    if (receiptData.length === 0 && selectedSaleGroup.dynamic_sales?.length > 0) {
+      const firstSale = selectedSaleGroup.dynamic_sales[0];
+      const totalQuantity = selectedSaleGroup.dynamic_sales.reduce((sum, sale) => {
+        return sum + sale.quantity; // Use sale.quantity instead of deviceIds.length
+      }, 0);
+      const deviceIds = selectedSaleGroup.dynamic_sales
+        .flatMap(sale => sale.device_id?.split(',').filter(id => id.trim()) || [])
+        .join(',') || null; // Aggregate device_ids from sales
+      const receiptInsert = {
+        store_receipt_id: selectedSaleGroup.store_id,
+        sale_group_id: selectedSaleGroup.id,
+        product_id: firstSale.dynamic_product.id,
+        sales_amount: selectedSaleGroup.total_amount,
+        sales_qty: totalQuantity,
+        product_name: firstSale.dynamic_product.name,
+        device_id: deviceIds,
+        customer_name: "",
+        customer_address: "",
+        phone_number: "",
+        warranty: "",
+        date: new Date(selectedSaleGroup.created_at).toISOString(),
+        receipt_id: `RCPT-${selectedSaleGroup.id}-${Date.now()}`
+      };
+
+      const { data: newReceipt } = await supabase
         .from("receipts")
-        .select("*")
+        .insert([receiptInsert])
+        .select()
+        .single();
+      receiptData = [newReceipt];
+    }
+
+    if (receiptData.length > 1) {
+      const [latestReceipt] = receiptData;
+      await supabase
+        .from("receipts")
+        .delete()
         .eq("sale_group_id", selectedSaleGroup.id)
-        .order('id', { ascending: false });
+        .neq("id", latestReceipt.id);
+      receiptData = [latestReceipt];
+    }
 
-      if (receiptData.length === 0 && selectedSaleGroup.dynamic_sales?.length > 0) {
-        const firstSale = selectedSaleGroup.dynamic_sales[0];
-        const totalQuantity = selectedSaleGroup.dynamic_sales.reduce((sum, sale) => {
-          const deviceIds = sale.dynamic_product.dynamic_product_imeis?.split(',').filter(id => id.trim()) || [];
-          return sum + deviceIds.length;
-        }, 0);
-        const receiptInsert = {
-          store_receipt_id: selectedSaleGroup.store_id,
-          sale_group_id: selectedSaleGroup.id,
-          product_id: firstSale.dynamic_product.id,
-          sales_amount: selectedSaleGroup.total_amount,
-          sales_qty: totalQuantity,
-          product_name: firstSale.dynamic_product.name,
-          device_id: firstSale.device_id || null,
-          customer_name: "",
-          customer_address: "",
-          phone_number: "",
-          warranty: "",
-          date: new Date(selectedSaleGroup.created_at).toISOString(),
-          receipt_id: `RCPT-${selectedSaleGroup.id}-${Date.now()}`
-        };
+    setReceipts(receiptData || []);
+  })();
+}, [selectedSaleGroup]);
 
-        const { data: newReceipt } = await supabase
-          .from("receipts")
-          .insert([receiptInsert])
-          .select()
-          .single();
-        receiptData = [newReceipt];
-      }
 
-      if (receiptData.length > 1) {
-        const [latestReceipt] = receiptData;
-        await supabase
-          .from("receipts")
-          .delete()
-          .eq("sale_group_id", selectedSaleGroup.id)
-          .neq("id", latestReceipt.id);
-        receiptData = [latestReceipt];
-      }
 
-      setReceipts(receiptData || []);
-    })();
-  }, [selectedSaleGroup]);
+
 
   useEffect(() => {
     const term = searchTerm.toLowerCase();
@@ -473,38 +481,39 @@ export default function ReceiptManager() {
   const headerStyle = { backgroundColor: headerBgColor, color: headerTextColor };
   const watermarkStyle = { color: watermarkColor, fontSize: '4rem', opacity: 0.1 };
 
-  const getProductGroups = () => {
-    if (!selectedSaleGroup || !selectedSaleGroup.dynamic_sales) return [];
+ const getProductGroups = () => {
+  if (!selectedSaleGroup || !selectedSaleGroup.dynamic_sales) return [];
 
-    const productMap = new Map();
-    selectedSaleGroup.dynamic_sales.forEach(sale => {
-      const product = sale.dynamic_product;
-      const deviceIds = product.dynamic_product_imeis?.split(',').filter(id => id.trim()) || [];
-      const soldDeviceIds = sale.device_id?.split(',').filter(id => id.trim()) || deviceIds;
-      const quantity = soldDeviceIds.length;
-      const unitPrice = sale.amount / sale.quantity;
-      const totalAmount = unitPrice * quantity;
+  const productMap = new Map();
+  selectedSaleGroup.dynamic_sales.forEach(sale => {
+    const product = sale.dynamic_product;
+    const soldDeviceIds = sale.device_id?.split(',').filter(id => id.trim()) || [];
+    const quantity = sale.quantity; // Use sale.quantity directly
+    const unitPrice = sale.amount / sale.quantity;
+    const totalAmount = unitPrice * quantity;
 
-      if (!productMap.has(product.id)) {
-        productMap.set(product.id, {
-          productId: product.id,
-          productName: product.name,
-          deviceIds: soldDeviceIds,
-          quantity,
-          unitPrice,
-          totalAmount,
-          sellingPrice: product.selling_price || unitPrice
-        });
-      } else {
-        const existing = productMap.get(product.id);
-        existing.deviceIds = [...new Set([...existing.deviceIds, ...soldDeviceIds])];
-        existing.quantity = existing.deviceIds.length;
-        existing.totalAmount = existing.unitPrice * existing.quantity;
-      }
-    });
+    if (!productMap.has(product.id)) {
+      productMap.set(product.id, {
+        productId: product.id,
+        productName: product.name,
+        deviceIds: soldDeviceIds,
+        quantity,
+        unitPrice,
+        totalAmount,
+        sellingPrice: product.selling_price || unitPrice
+      });
+    } else {
+      const existing = productMap.get(product.id);
+      existing.deviceIds = [...new Set([...existing.deviceIds, ...soldDeviceIds])];
+      existing.quantity += quantity; // Aggregate quantity
+      existing.totalAmount = existing.unitPrice * existing.quantity;
+    }
+  });
 
-    return Array.from(productMap.values());
-  };
+  return Array.from(productMap.values());
+};
+
+
 
   const productGroups = getProductGroups();
   const totalQuantity = productGroups.reduce((sum, group) => sum + group.quantity, 0);

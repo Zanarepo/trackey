@@ -302,7 +302,6 @@ const checkSoldDevices = useCallback(async (deviceIds, productId, lineIdx) => {
       videoConstraints: { width: 640, height: 480, facingMode: 'environment' },
     };
 
-
 const onScanSuccess = async (scannedDeviceId) => {
   playSuccessSound();
   if (!scannedDeviceId) {
@@ -313,6 +312,27 @@ const onScanSuccess = async (scannedDeviceId) => {
 
   console.log('Scanned Device ID:', scannedDeviceId);
 
+  // Check if device ID is already sold
+  const { data: soldData, error: soldError } = await supabase
+    .from('dynamic_sales')
+    .select('device_id')
+    .eq('device_id', scannedDeviceId)
+    .eq('store_id', storeId)
+    .single();
+  if (soldError && soldError.code !== 'PGRST116') {
+    console.error('Error checking sold status:', soldError);
+    toast.error('Failed to validate Product ID');
+    setScannerError('Failed to validate Product ID');
+    return false;
+  }
+  if (soldData) {
+    console.log('Device ID is sold:', scannedDeviceId);
+    toast.error(`Product ID "${scannedDeviceId}" has already been sold`);
+    setScannerError(`Product ID "${scannedDeviceId}" has already been sold`);
+    return false;
+  }
+
+  // Query product details
   const { data: productData, error } = await supabase
     .from('dynamic_product')
     .select('id, name, selling_price, dynamic_product_imeis, device_size')
@@ -339,17 +359,15 @@ const onScanSuccess = async (scannedDeviceId) => {
 
     if (modal === 'add') {
       const ls = [...lines];
-      // Check if the product name already exists in any line
       const existingLineIdx = ls.findIndex(line => {
         const product = products.find(p => p.id === line.dynamic_product_id);
         return product && product.name === productData.name;
       });
 
       if (existingLineIdx !== -1) {
-        // Product exists, append to that line
         if (ls[existingLineIdx].deviceIds.some(id => id.trim().toLowerCase() === scannedDeviceId.toLowerCase())) {
           toast.error(`Product ID "${scannedDeviceId}" already exists in this product`);
-          setScannerError(`Product ID "${scannedDeviceId}" `);
+          setScannerError(`Product ID "${scannedDeviceId}" already exists`);
           return false;
         }
         ls[existingLineIdx].deviceIds.push(scannedDeviceId);
@@ -357,7 +375,6 @@ const onScanSuccess = async (scannedDeviceId) => {
         if (!ls[existingLineIdx].isQuantityManual) {
           ls[existingLineIdx].quantity = ls[existingLineIdx].deviceIds.filter(id => id.trim()).length || 1;
         }
-        // Merge any other lines with the same product name
         const mergedLines = ls.filter((line, idx) => {
           if (idx === existingLineIdx) return true;
           const product = products.find(p => p.id === line.dynamic_product_id);
@@ -377,9 +394,7 @@ const onScanSuccess = async (scannedDeviceId) => {
         checkSoldDevices(deviceIds, productData.id, existingLineIdx);
         setScannerTarget({ modal, lineIdx: existingLineIdx, deviceIdx: newDeviceIdx });
       } else {
-        // No existing line with this product name
         if (!ls[lineIdx].dynamic_product_id || ls[lineIdx].deviceIds.every(id => !id.trim())) {
-          // Update current line if empty
           if (ls[lineIdx].deviceIds.some(id => id.trim().toLowerCase() === scannedDeviceId.toLowerCase())) {
             toast.error(`Product ID "${scannedDeviceId}" already exists in this line`);
             setScannerError(`Product ID "${scannedDeviceId}" already exists`);
@@ -399,7 +414,6 @@ const onScanSuccess = async (scannedDeviceId) => {
           checkSoldDevices(deviceIds, productData.id, lineIdx);
           setScannerTarget({ modal, lineIdx, deviceIdx: newDeviceIdx });
         } else {
-          // Create new line for different product
           const newLine = {
             dynamic_product_id: Number(productData.id),
             quantity: 1,
@@ -432,7 +446,7 @@ const onScanSuccess = async (scannedDeviceId) => {
       };
       console.log('Updated Sale Form:', updatedForm);
       setSaleForm(updatedForm);
-      newDeviceIdx = updatedForm.deviceIds.length - 1;
+      newDeviceIdx = deviceIdx;
       checkSoldDevices(deviceIds, productData.id, 0);
       setScannerTarget({ modal, lineIdx, deviceIdx: newDeviceIdx });
     }
@@ -445,7 +459,6 @@ const onScanSuccess = async (scannedDeviceId) => {
   toast.error('No scanner target set');
   return false;
 };
-
 
 
 
@@ -567,8 +580,6 @@ return () => {
     setExternalScannerMode(false);
   };
 
-
-
 const handleManualInput = async () => {
   const trimmedInput = manualInput.trim();
   if (!trimmedInput) {
@@ -579,6 +590,27 @@ const handleManualInput = async () => {
 
   console.log('Manual Input Device ID:', trimmedInput);
 
+  // Check if device ID is already sold
+  const { data: soldData, error: soldError } = await supabase
+    .from('dynamic_sales')
+    .select('device_id')
+    .eq('device_id', trimmedInput)
+    .eq('store_id', storeId)
+    .single();
+  if (soldError && soldError.code !== 'PGRST116') {
+    console.error('Error checking sold status:', soldError);
+    toast.error('Failed to validate Product ID');
+    setScannerError('Failed to validate Product ID');
+    return;
+  }
+  if (soldData) {
+    console.log('Device ID is sold:', trimmedInput);
+    toast.error(`Product ID "${trimmedInput}" has already been sold`);
+    setScannerError(`Product ID "${trimmedInput}" has already been sold`);
+    setManualInput('');
+    return;
+  }
+
   // Check if Device ID exists in dynamic_product
   const { data: productData, error } = await supabase
     .from('dynamic_product')
@@ -586,11 +618,12 @@ const handleManualInput = async () => {
     .eq('store_id', storeId)
     .ilike('dynamic_product_imeis', `%${trimmedInput}%`)
     .single();
-  
+
   if (error || !productData) {
     console.error('Supabase Query Error:', error);
     toast.error(`Product ID "${trimmedInput}" not found`);
     setScannerError(`Product ID "${trimmedInput}" not found`);
+    setManualInput('');
     return;
   }
 
@@ -606,29 +639,25 @@ const handleManualInput = async () => {
 
     if (modal === 'add') {
       const ls = [...lines];
-      // Check if the product name already exists in any line
       const existingLineIdx = ls.findIndex(line => {
         const product = products.find(p => p.id === line.dynamic_product_id);
         return product && product.name === productData.name;
       });
 
       if (existingLineIdx !== -1) {
-        // Product exists, append to that line
         if (ls[existingLineIdx].deviceIds.some(id => id.trim().toLowerCase() === trimmedInput.toLowerCase())) {
           toast.error(`Product ID "${trimmedInput}" already exists in this product`);
           setScannerError(`Product ID "${trimmedInput}" already exists`);
+          setManualInput('');
           return;
         }
-        // Filter out empty deviceIds and deviceSizes
         ls[existingLineIdx].deviceIds = ls[existingLineIdx].deviceIds.filter(id => id.trim());
         ls[existingLineIdx].deviceSizes = ls[existingLineIdx].deviceSizes.slice(0, ls[existingLineIdx].deviceIds.length);
-        // Append new device ID and size
         ls[existingLineIdx].deviceIds.push(trimmedInput);
         ls[existingLineIdx].deviceSizes.push(idIndex !== -1 ? deviceSizes[idIndex] || '' : '');
         if (!ls[existingLineIdx].isQuantityManual) {
           ls[existingLineIdx].quantity = ls[existingLineIdx].deviceIds.length || 1;
         }
-        // Merge any other lines with the same product name
         const mergedLines = ls.filter((line, idx) => {
           if (idx === existingLineIdx) return true;
           const product = products.find(p => p.id === line.dynamic_product_id);
@@ -644,16 +673,15 @@ const handleManualInput = async () => {
         });
         console.log('Updated Lines (Existing Product):', mergedLines);
         setLines(mergedLines);
-        newDeviceIdx = ls[existingLineIdx].deviceIds.length;
+        newDeviceIdx = ls[existingLineIdx].deviceIds.length - 1;
         checkSoldDevices(deviceIds, productData.id, existingLineIdx);
         setScannerTarget({ modal, lineIdx: existingLineIdx, deviceIdx: newDeviceIdx });
       } else {
-        // No existing line with this product name
         if (!ls[lineIdx].dynamic_product_id || ls[lineIdx].deviceIds.every(id => !id.trim())) {
-          // Update current line if empty
           if (ls[lineIdx].deviceIds.some(id => id.trim().toLowerCase() === trimmedInput.toLowerCase())) {
             toast.error(`Product ID "${trimmedInput}" already exists in this line`);
             setScannerError(`Product ID "${trimmedInput}" already exists`);
+            setManualInput('');
             return;
           }
           ls[lineIdx] = {
@@ -666,11 +694,10 @@ const handleManualInput = async () => {
           };
           console.log('Updated Lines (Current Line):', ls);
           setLines(ls);
-          newDeviceIdx = ls[lineIdx].deviceIds.length;
+          newDeviceIdx = 0;
           checkSoldDevices(deviceIds, productData.id, lineIdx);
           setScannerTarget({ modal, lineIdx, deviceIdx: newDeviceIdx });
         } else {
-          // Create new line for different product
           const newLine = {
             dynamic_product_id: Number(productData.id),
             quantity: 1,
@@ -691,19 +718,20 @@ const handleManualInput = async () => {
       if (saleForm.deviceIds.some((id, i) => i !== deviceIdx && id.trim().toLowerCase() === trimmedInput.toLowerCase())) {
         toast.error(`Product ID "${trimmedInput}" already exists in this sale`);
         setScannerError(`Product ID "${trimmedInput}" already exists`);
+        setManualInput('');
         return;
       }
       const updatedForm = {
         ...saleForm,
         dynamic_product_id: Number(productData.id),
         unit_price: Number(productData.selling_price),
-        deviceIds: [...saleForm.deviceIds.filter(id => id.trim()), trimmedInput],
-        deviceSizes: [...saleForm.deviceSizes.slice(0, saleForm.deviceIds.filter(id => id.trim()).length), idIndex !== -1 ? deviceSizes[idIndex] || '' : ''],
-        quantity: saleForm.isQuantityManual ? saleForm.quantity : (saleForm.deviceIds.filter(id => id.trim()).length + 1 || 1),
+        deviceIds: [...saleForm.deviceIds.slice(0, deviceIdx), trimmedInput, ...saleForm.deviceIds.slice(deviceIdx + 1)],
+        deviceSizes: [...saleForm.deviceSizes.slice(0, deviceIdx), (idIndex !== -1 ? deviceSizes[idIndex] || '' : ''), ...saleForm.deviceSizes.slice(deviceIdx + 1)],
+        quantity: saleForm.isQuantityManual ? saleForm.quantity : (saleForm.deviceIds.filter(id => id.trim()).length || 1),
       };
       console.log('Updated Sale Form:', updatedForm);
       setSaleForm(updatedForm);
-      newDeviceIdx = updatedForm.deviceIds.length;
+      newDeviceIdx = deviceIdx;
       checkSoldDevices(deviceIds, productData.id, 0);
       setScannerTarget({ modal, lineIdx, deviceIdx: newDeviceIdx });
     }
@@ -715,6 +743,7 @@ const handleManualInput = async () => {
   } else {
     console.error('No scanner target set');
     toast.error('No scanner target set');
+    setManualInput('');
   }
 };
 
@@ -819,102 +848,125 @@ const handleManualInput = async () => {
     setCurrentPage(1);
   }, [viewMode]);
 
+
+  
   // Form Handlers
- const handleLineChange = async (lineIdx, field, value, deviceIdx = null) => {
-  if (field === 'deviceIds' && deviceIdx !== null && value.trim()) {
-    // Handle manual Device ID input
-    const trimmedInput = value.trim();
-    console.log('Manual Device ID Input:', trimmedInput, 'Line:', lineIdx, 'DeviceIdx:', deviceIdx);
-
-    // Query dynamic_product for matching Device ID
-    const { data: productData, error } = await supabase
-      .from('dynamic_product')
-      .select('id, name, selling_price, dynamic_product_imeis, device_size')
-      .eq('store_id', storeId)
-      .ilike('dynamic_product_imeis', `%${trimmedInput}%`)
-      .limit(1)
-      .single();
-
+const handleLineChange = async (lineIdx, field, value, deviceIdx = null, isBlur = false) => {
+  if (field === 'deviceIds' && deviceIdx !== null) {
+    // Update deviceIds immediately without validation on onChange
     setLines((ls) => {
       const next = [...ls];
-      if (error || !productData) {
-        console.error('Supabase Query Error for Device ID:', error, 'Input:', trimmedInput);
-        toast.error(`Product ID "${trimmedInput}" not found`);
-        next[lineIdx].deviceIds[deviceIdx] = trimmedInput; // Update Device ID anyway
-        next[lineIdx].deviceSizes[deviceIdx] = ''; // Clear size
-        return next;
+      next[lineIdx].deviceIds[deviceIdx] = value;
+      if (!value.trim()) {
+        next[lineIdx].deviceSizes[deviceIdx] = '';
+      }
+      return next;
+    });
+
+    // Perform validation only onBlur or Enter
+    if (isBlur && value.trim()) {
+      const trimmedInput = value.trim();
+      console.log('Validating Device ID:', trimmedInput, 'Line:', lineIdx, 'DeviceIdx:', deviceIdx);
+
+      // Check if device ID is already sold
+      const { data: soldData, error: soldError } = await supabase
+        .from('dynamic_sales')
+        .select('device_id')
+        .eq('device_id', trimmedInput)
+        .eq('store_id', storeId)
+        .single();
+      if (soldError && soldError.code !== 'PGRST116') {
+        console.error('Error checking sold status:', soldError);
+        toast.error('Failed to validate Product ID');
+        setLines((ls) => {
+          const next = [...ls];
+          next[lineIdx].deviceIds[deviceIdx] = '';
+          next[lineIdx].deviceSizes[deviceIdx] = '';
+          return next;
+        });
+        return;
+      }
+      if (soldData) {
+        console.log('Device ID is sold:', trimmedInput);
+        toast.error(`Product ID "${trimmedInput}" has already been sold`);
+        setLines((ls) => {
+          const next = [...ls];
+          next[lineIdx].deviceIds[deviceIdx] = '';
+          next[lineIdx].deviceSizes[deviceIdx] = '';
+          return next;
+        });
+        return;
       }
 
-      console.log('Found Product for Device ID:', productData);
+      // Query dynamic_product for matching device ID
+      const { data: productData, error } = await supabase
+        .from('dynamic_product')
+        .select('id, name, selling_price, dynamic_product_imeis, device_size')
+        .eq('store_id', storeId)
+        .ilike('dynamic_product_imeis', `%${trimmedInput}%`)
+        .limit(1)
+        .single();
 
-      const deviceIds = productData.dynamic_product_imeis ? productData.dynamic_product_imeis.split(',').map(id => id.trim()).filter(id => id) : [];
-      const deviceSizes = productData.device_size ? productData.device_size.split(',').map(size => size.trim()).filter(size => size) : [];
-      const idIndex = deviceIds.indexOf(trimmedInput);
-
-      // Check if the product name already exists in any line
-      const existingLineIdx = next.findIndex(line => {
-        const product = products.find(p => p.id === line.dynamic_product_id);
-        return product && product.name === productData.name;
-      });
-
-      if (existingLineIdx !== -1) {
-        // Product exists, append to that line
-        if (next[existingLineIdx].deviceIds.some(id => id.trim().toLowerCase() === trimmedInput.toLowerCase())) {
-          toast.error(`Product ID "${trimmedInput}" already exists in this product`);
+      setLines((ls) => {
+        const next = [...ls];
+        if (error || !productData) {
+          console.error('Supabase error for Device ID:', error, 'Input:', trimmedInput);
+          toast.error(`Product ID "${trimmedInput}" not found`);
+          next[lineIdx].deviceIds[deviceIdx] = trimmedInput;
+          next[lineIdx].deviceSizes[deviceIdx] = '';
           return next;
         }
-        // Filter out empty deviceIds and deviceSizes
-        next[existingLineIdx].deviceIds = next[existingLineIdx].deviceIds.filter(id => id.trim());
-        next[existingLineIdx].deviceSizes = next[existingLineIdx].deviceSizes.slice(0, next[existingLineIdx].deviceIds.length);
-        // Update or append device ID
-        if (deviceIdx < next[existingLineIdx].deviceIds.length) {
-          next[existingLineIdx].deviceIds[deviceIdx] = trimmedInput;
-          next[existingLineIdx].deviceSizes[deviceIdx] = idIndex !== -1 ? deviceSizes[idIndex] || '' : '';
-        } else {
-          next[existingLineIdx].deviceIds.push(trimmedInput);
-          next[existingLineIdx].deviceSizes.push(idIndex !== -1 ? deviceSizes[idIndex] || '' : '');
-        }
-        if (!next[existingLineIdx].isQuantityManual) {
-          next[existingLineIdx].quantity = next[existingLineIdx].deviceIds.length || 1;
-        }
-        // Merge any other lines with the same product name
-        const mergedLines = next.filter((line, idx) => {
-          if (idx === existingLineIdx) return true;
+
+        console.log('Found Product for ID:', productData);
+
+        const deviceIds = productData.dynamic_product_imeis ? productData.dynamic_product_imeis.split(',').map(id => id.trim()).filter(id => id) : [];
+        const deviceSizes = productData.device_size ? productData.device_size.split(',').map(size => size.trim()).filter(size => size) : [];
+        const idIndex = deviceIds.indexOf(trimmedInput);
+
+        const existingLineIdx = next.findIndex(line => {
           const product = products.find(p => p.id === line.dynamic_product_id);
-          if (product && product.name === productData.name) {
-            next[existingLineIdx].deviceIds.push(...line.deviceIds.filter(id => id.trim()));
-            next[existingLineIdx].deviceSizes.push(...line.deviceSizes.slice(0, line.deviceIds.filter(id => id.trim()).length));
-            if (!next[existingLineIdx].isQuantityManual) {
-              next[existingLineIdx].quantity = next[existingLineIdx].deviceIds.length || 1;
-            }
-            return false;
-          }
-          return true;
+          return product && product.name === productData.name;
         });
-        console.log('Updated Lines (Existing Product):', mergedLines);
-        checkSoldDevices(deviceIds, productData.id, existingLineIdx);
-        return mergedLines;
-      } else {
-        // No existing line with this product name
-        if (!next[lineIdx].dynamic_product_id || next[lineIdx].deviceIds.every(id => !id.trim())) {
-          // Update current line if empty
-          if (next[lineIdx].deviceIds.some(id => id.trim().toLowerCase() === trimmedInput.toLowerCase())) {
-            toast.error(`Product ID "${trimmedInput}" already exists in this line`);
+
+        const currentLineProduct = next[lineIdx].dynamic_product_id ? products.find(p => p.id === next[lineIdx].dynamic_product_id) : null;
+        const isCurrentLineMatching = currentLineProduct && currentLineProduct.name === productData.name;
+
+        if (existingLineIdx !== -1 && existingLineIdx !== lineIdx) {
+          if (next[existingLineIdx].deviceIds.some(id => id.trim().toLowerCase() === trimmedInput.toLowerCase())) {
+            toast.error(`Product ID "${trimmedInput}" already exists in this product`);
+            next[lineIdx].deviceIds[deviceIdx] = '';
             return next;
           }
-          next[lineIdx] = {
-            ...next[lineIdx],
-            dynamic_product_id: Number(productData.id),
-            unit_price: Number(productData.selling_price),
-            deviceIds: [trimmedInput],
-            deviceSizes: [idIndex !== -1 ? deviceSizes[idIndex] || '' : ''],
-            quantity: next[lineIdx].isQuantityManual ? next[lineIdx].quantity : 1,
-          };
-          console.log('Updated Lines (Current Line):', next);
+          next[existingLineIdx].deviceIds.push(trimmedInput);
+          next[existingLineIdx].deviceSizes.push(idIndex !== -1 ? deviceSizes[idIndex] || '' : '');
+          if (!next[existingLineIdx].isQuantityManual) {
+            next[existingLineIdx].quantity = next[existingLineIdx].deviceIds.filter(id => id.trim()).length || 1;
+          }
+          next[lineIdx].deviceIds[deviceIdx] = '';
+          console.log('Appended to Existing Line:', { existingLineIdx, deviceIds: next[existingLineIdx].deviceIds });
+          checkSoldDevices(deviceIds, productData.id, existingLineIdx);
+        } else if (isCurrentLineMatching || !next[lineIdx].dynamic_product_id) {
+          if (next[lineIdx].deviceIds.some((id, idx) => idx !== deviceIdx && id.trim().toLowerCase() === trimmedInput.toLowerCase())) {
+            toast.error(`Product ID "${trimmedInput}" already exists in this line`);
+            next[lineIdx].deviceIds[deviceIdx] = '';
+            return next;
+          }
+          next[lineIdx].dynamic_product_id = Number(productData.id);
+          next[lineIdx].unit_price = Number(productData.selling_price);
+          next[lineIdx].deviceIds[deviceIdx] = trimmedInput;
+          next[lineIdx].deviceSizes[deviceIdx] = idIndex !== -1 ? deviceSizes[idIndex] || '' : '';
+          if (!next[lineIdx].isQuantityManual) {
+            next[lineIdx].quantity = next[lineIdx].deviceIds.filter(id => id.trim()).length || 1;
+          }
+          console.log('Updated Current Line:', { lineIdx, deviceIds: next[lineIdx].deviceIds });
           checkSoldDevices(deviceIds, productData.id, lineIdx);
           return next;
         } else {
-          // Create new line for different product
+          if (next.some(line => line.deviceIds.some(id => id.trim().toLowerCase() === trimmedInput.toLowerCase()))) {
+            toast.error(`Product ID "${trimmedInput}" already exists in another product`);
+            next[lineIdx].deviceIds[deviceIdx] = '';
+            return next;
+          }
           const newLine = {
             dynamic_product_id: Number(productData.id),
             quantity: 1,
@@ -924,31 +976,42 @@ const handleManualInput = async () => {
             isQuantityManual: false,
           };
           next.push(newLine);
-          console.log('Added New Line:', next);
+          next[lineIdx].deviceIds[deviceIdx] = '';
+          console.log('Added New Line:', { newLineIdx: next.length - 1, deviceIds: newLine.deviceIds });
           checkSoldDevices(deviceIds, productData.id, next.length - 1);
-          return next;
         }
-      }
-    });
+
+        // Cleanup: Clear or remove original row
+        console.log('Before cleanup:', { lineIdx, dynamic_product_id: next[lineIdx].dynamic_product_id, deviceIds: next[lineIdx].deviceIds });
+        if (next[lineIdx].dynamic_product_id) {
+          next[lineIdx].deviceIds = next[lineIdx].deviceIds.map((id, idx) => (idx === deviceIdx ? '' : id));
+          next[lineIdx].deviceSizes = next[lineIdx].deviceSizes.map((size, idx) => (idx === deviceIdx ? '' : size));
+          if (!next[lineIdx].isQuantityManual) {
+            next[lineIdx].quantity = next[lineIdx].deviceIds.filter(id => id.trim()).length || 1;
+          }
+        } else if (next.length > 1 && next[lineIdx].deviceIds.every(id => !id.trim())) {
+          next.splice(lineIdx, 1);
+          console.log('Removed empty row:', { lineIdx });
+        } else if (next.length === 1 && next[0].deviceIds.every(id => !id.trim())) {
+          next[0] = {
+            dynamic_product_id: null,
+            quantity: 1,
+            unit_price: 0,
+            deviceIds: [''],
+            deviceSizes: [''],
+            isQuantityManual: false,
+          };
+          console.log('Reset only row:', { lineIdx });
+        }
+        console.log('After cleanup:', { lineIdx, dynamic_product_id: next[lineIdx]?.dynamic_product_id, deviceIds: next[lineIdx]?.deviceIds });
+
+        return next;
+      });
+    }
   } else {
-    // Handle other fields
     setLines((ls) => {
       const next = [...ls];
-      if (field === 'deviceIds' && deviceIdx !== null) {
-        next[lineIdx].deviceIds[deviceIdx] = value;
-        // Autofill size only if product is selected and deviceId matches
-        const product = products.find(p => p.id === next[lineIdx].dynamic_product_id);
-        if (product && value) {
-          const idIndex = product.deviceIds.indexOf(value);
-          next[lineIdx].deviceSizes[deviceIdx] = idIndex !== -1 ? product.deviceSizes[idIndex] || '' : '';
-        } else {
-          next[lineIdx].deviceSizes[deviceIdx] = '';
-        }
-        if (!next[lineIdx].isQuantityManual) {
-          const nonEmptyCount = next[lineIdx].deviceIds.filter(id => id.trim()).length;
-          next[lineIdx].quantity = nonEmptyCount || 1;
-        }
-      } else if (field === 'deviceSizes' && deviceIdx !== null) {
+      if (field === 'deviceSizes' && deviceIdx !== null) {
         next[lineIdx].deviceSizes[deviceIdx] = value;
       } else if (field === 'quantity') {
         next[lineIdx].quantity = +value;
@@ -976,6 +1039,8 @@ const handleManualInput = async () => {
     });
   }
 };
+
+
 
   const addDeviceId = (e, lineIdx) => {
     e.preventDefault();
@@ -1381,7 +1446,7 @@ const handleManualInput = async () => {
 
   // Render
   return (
-    <div className="p-0 max-w-7xl mx-auto dark:bg-gray-900 dark:text-white mt-48">
+    <div className="p-2 max-w-7xl mx-auto dark:bg-gray-900 dark:text-white mt-48">
       <ToastContainer position="top-right" autoClose={3000} />
    
 
@@ -1410,21 +1475,21 @@ const handleManualInput = async () => {
             />
           )}
         </div>
-        <button
-          onClick={() => setShowAdd(true)}
-          className="flex items-center gap-1 px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 w-full sm:w-auto new-sale-button"
-        >
-          <FaPlus /> New Sale
-        </button>
+       <button
+  onClick={() => setShowAdd(true)}
+  className="flex items-center justify-center gap-2 px-4 py-2 text-sm sm:text-base bg-indigo-600 text-white rounded-md hover:bg-indigo-700 w-full sm:w-auto new-sale-button"
+>
+  <FaPlus className="text-sm sm:text-base" /> New Sale
+</button>
+
       </div>
 
       {/* Add Modal */}
-     {showAdd && (
+  {showAdd && (
   <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 z-50">
-  <form
-    onSubmit={createSale}
-    className="bg-white dark:bg-gray-900 p-4 sm:p-6 rounded-lg shadow-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto mt-28"
-
+    <form
+      onSubmit={createSale}
+      className="bg-white dark:bg-gray-900 p-4 sm:p-6 rounded-lg shadow-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto mt-28"
     >
       <h2 className="text-xl sm:text-2xl font-bold mb-4">Add Sale</h2>
 
@@ -1467,7 +1532,6 @@ const handleManualInput = async () => {
                 value={line.unit_price}
                 onChange={(e) => handleLineChange(lineIdx, 'unit_price', e.target.value)}
                 className="w-full p-2 border rounded dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                required
               />
             </div>
             <div className="sm:col-span-3 flex items-end">
@@ -1484,51 +1548,58 @@ const handleManualInput = async () => {
 
           <div className="mt-2">
             <label className="block mb-1 text-sm font-medium">Product IDs and Sizes (Optional)</label>
-           {line.deviceIds.map((id, deviceIdx) => (
-  <div key={`device-${lineIdx}-${deviceIdx}`} className="flex flex-col sm:flex-row gap-2 mb-2">
-    <select
-      value={id}
-      onChange={(e) => handleLineChange(lineIdx, 'deviceIds', e.target.value, deviceIdx)}
-      className="flex-1 p-2 border rounded dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-    >
-      <option value="">Select Product ID (Optional)</option>
-      {(availableDeviceIds[lineIdx]?.deviceIds || []).map((deviceId) => (
-        <option key={deviceId} value={deviceId}>{deviceId}</option>
-      ))}
-    </select>
-    <input
-      type="text"
-      value={id}
-      onChange={(e) => handleLineChange(lineIdx, 'deviceIds', e.target.value, deviceIdx)}
-      placeholder="Or enter Product ID manually"
-      className="flex-1 p-2 border rounded dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-    />
-    <input
-      type="text"
-      value={line.deviceSizes[deviceIdx] || ''}
-      onChange={(e) => handleLineChange(lineIdx, 'deviceSizes', e.target.value, deviceIdx)}
-      placeholder="Enter Product/Goods/Device Size (Optional)"
-      className="flex-1 p-2 border rounded dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-    />
-    <div className="flex gap-1">
-      <button
-        type="button"
-        onClick={() => openScanner('add', lineIdx, deviceIdx)}
-        className="p-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
-        title="Scan Barcode"
-      >
-        <FaCamera />
-      </button>
-      <button
-        type="button"
-        onClick={() => removeDeviceId(lineIdx, deviceIdx)}
-        className="p-2 text-red-600 hover:text-red-800"
-      >
-        <FaTrashAlt />
-      </button>
-    </div>
-  </div>
-))}
+            {line.deviceIds.map((id, deviceIdx) => (
+              <div key={deviceIdx} className="flex flex-col sm:flex-row gap-2 mb-2">
+                <select
+                  value={id}
+                  onChange={(e) => handleLineChange(lineIdx, 'deviceIds', e.target.value, deviceIdx)}
+                  className="flex-1 p-2 border rounded dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                >
+                  <option value="">Select Product ID (Optional)</option>
+                  {(availableDeviceIds[lineIdx]?.deviceIds || []).map((deviceId) => (
+                    <option key={deviceId} value={deviceId}>{deviceId}</option>
+                  ))}
+                </select>
+                <input
+                  type="text"
+                  value={id}
+                  onChange={(e) => handleLineChange(lineIdx, 'deviceIds', e.target.value, deviceIdx)}
+                  onBlur={(e) => handleLineChange(lineIdx, 'deviceIds', e.target.value, deviceIdx, true)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleLineChange(lineIdx, 'deviceIds', e.target.value, deviceIdx, true);
+                    }
+                  }}
+                  placeholder="Or enter product ID manually"
+                  className="flex-1 p-2 border rounded dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <input
+                  type="text"
+                  value={line.deviceSizes[deviceIdx] || ''}
+                  onChange={(e) => handleLineChange(lineIdx, 'deviceSizes', e.target.value, deviceIdx)}
+                  placeholder="Enter Product/Goods/Device Size (Optional)"
+                  className="flex-1 p-2 border rounded dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                />
+                <div class="flex gap-1">
+                  <button
+                    type="button"
+                    onClick={() => openScanner('add', lineIdx, deviceIdx)}
+                    className="p-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                    title="Scan Barcode"
+                  >
+                    <FaCamera />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => removeDeviceId(lineIdx, deviceIdx)}
+                    className="p-2 text-red-600 hover:text-red-800"
+                  >
+                    <FaTrashAlt />
+                  </button>
+                </div>
+              </div>
+            ))}
             <button
               type="button"
               onClick={(e) => addDeviceId(e, lineIdx)}
@@ -1587,9 +1658,6 @@ const handleManualInput = async () => {
     </form>
   </div>
 )}
-
-
-
 
 
       {/* Edit Modal */}
@@ -1894,7 +1962,7 @@ const handleManualInput = async () => {
            <table className="min-w-full bg-white dark:bg-gray-900 divide-y divide-gray-200">
              <thead className="bg-gray-100 dark:bg-gray-800">
                <tr>
-                 {['Product', 'Quantity', 'Unit Price', 'Amount', 'Payment', 'Product IDs/Sizes', 'Date Sold', 'Actions'].map((h) => (
+                 {['Product', 'Quantity', 'Unit Price', 'Amount', 'Payment', 'Product IDs/Sizes', 'Date Sold'].map((h) => (
                    <th
                      key={h}
                      className="px-4 py-2 text-left text-sm font-semibold text-gray-700 dark:text-gray-200"
@@ -1927,37 +1995,8 @@ const handleManualInput = async () => {
                    </td>
                    <td className="px-4 py-2 text-sm">{new Date(s.sold_at).toLocaleString()}</td>
                    <td className="px-4 py-2 text-sm flex gap-2">
-                   <button
-  type="button"
-  onClick={() => {
-    setEditing(s.id);
-    setSaleForm({
-      dynamic_product_id: s.dynamic_product_id,
-      quantity: s.quantity,
-      unit_price: s.unit_price,
-      deviceIds: s.deviceIds.length > 0 ? s.deviceIds : [''],
-      deviceSizes: s.deviceSizes.length > 0 ? s.deviceSizes : [''],
-      payment_method: s.payment_method,
-      isQuantityManual: false,
-    });
-    const product = products.find(p => p.id === s.dynamic_product_id);
-    if (product) {
-      checkSoldDevices(product.deviceIds, s.dynamic_product_id, 0);
-    }
-  }}
-  className={`p-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 edit-button-${idx}`}
-  title="Edit sale"
->
-  <FaEdit />
-</button>
-                     <button
-                       type="button"
-                       onClick={() => deleteSale(s)}
-                       className="p-2 bg-red-500 text-white rounded hover:bg-red-600"
-                       title="Delete sale"
-                     >
-                       <FaTrashAlt />
-                     </button>
+                  
+                     
                    </td>
                  </tr>
                ))}
