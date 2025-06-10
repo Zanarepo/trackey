@@ -4,7 +4,7 @@ import {
   FaTrashAlt,
   FaFileCsv,
   FaFilePdf,
-  FaEdit,
+
   FaCamera,
 } from 'react-icons/fa';
 import { supabase } from '../../supabaseClient';
@@ -1320,33 +1320,6 @@ const handleLineChange = async (lineIdx, field, value, deviceIdx = null, isBlur 
 };
 
 
-  const deleteSale = async (s) => {
-    if (!window.confirm(`Delete sale #${s.id}?`)) return;
-    try {
-      const { error } = await supabase.from('dynamic_sales').delete().eq('id', s.id);
-      if (error) throw new Error(`Deletion failed: ${error.message}`);
-
-      const inv = inventory.find((i) => i.dynamic_product_id === s.dynamic_product_id);
-      if (inv) {
-        const newQty = inv.available_qty + s.quantity;
-        await supabase
-          .from('dynamic_inventory')
-          .update({ available_qty: newQty })
-          .eq('dynamic_product_id', s.dynamic_product_id)
-          .eq('store_id', storeId);
-        setInventory((prev) =>
-          prev.map((i) =>
-            i.dynamic_product_id === s.dynamic_product_id ? { ...i, available_qty: newQty } : i
-          )
-        );
-      }
-
-      toast.success('Sale deleted successfully!');
-      fetchSales();
-    } catch (err) {
-      toast.error(err.message);
-    }
-  };
 
   // Export Functions
   const exportCSV = () => {
@@ -1973,7 +1946,7 @@ const handleLineChange = async (lineIdx, field, value, deviceIdx = null, isBlur 
                </tr>
              </thead>
              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-               {paginatedSales.map((s, idx) => (
+               {paginatedSales.map((s) => (
                  <tr key={s.id}>
                    <td className="px-4 py-2 text-sm">{s.dynamic_product.name}</td>
                    <td className="px-4 py-2 text-sm">{s.quantity}</td>
