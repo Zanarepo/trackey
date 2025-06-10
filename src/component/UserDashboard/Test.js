@@ -24,6 +24,13 @@ export default function SalesTracker() {
   const itemsPerPage = 20;
   const detailPageSize = 20;
 
+const playSuccessSound = () => {
+  const audio = new Audio('https://freesound.org/data/previews/321/321552_5265637-lq.mp3');
+  audio.play().catch((err) => console.error('Audio playback failed:', err));
+};
+
+
+
   // State Declarations
   const [products, setProducts] = useState([]);
   const [inventory, setInventory] = useState([]);
@@ -129,6 +136,11 @@ export default function SalesTracker() {
   }, [selectedDeviceInfo, detailPage]);
 
   const totalDetailPages = Math.ceil(selectedDeviceInfo.length / detailPageSize);
+  
+
+
+
+
   
 // Utility Function (add above the component)
 const formatCurrency = (value) =>
@@ -248,6 +260,8 @@ const checkSoldDevices = useCallback(async (deviceIds, productId, lineIdx) => {
   }, [externalScannerMode, scannerTarget, lines, saleForm]);
 
   // Scanner: Webcam Scanner
+
+  
   useEffect(() => {
     if (!showScanner || !scannerDivRef.current || !videoRef.current || externalScannerMode) return;
 
@@ -290,31 +304,28 @@ const checkSoldDevices = useCallback(async (deviceIds, productId, lineIdx) => {
 
 
 
-
-    ///onscan sucesss//////////////////////////////
- const onScanSuccess = async (decodedText) => {
-  const scannedDeviceId = decodedText.trim();
+const onScanSuccess = async (scannedDeviceId) => {
+  playSuccessSound();
   if (!scannedDeviceId) {
     toast.error('Scanned Product ID cannot be empty');
     setScannerError('Scanned Product ID cannot be empty');
-    return;
+    return false;
   }
 
   console.log('Scanned Device ID:', scannedDeviceId);
 
-  // Check if Device ID exists in dynamic_product
   const { data: productData, error } = await supabase
     .from('dynamic_product')
     .select('id, name, selling_price, dynamic_product_imeis, device_size')
     .eq('store_id', storeId)
     .ilike('dynamic_product_imeis', `%${scannedDeviceId}%`)
     .single();
-  
+
   if (error || !productData) {
     console.error('Supabase Query Error:', error);
     toast.error(`Product ID "${scannedDeviceId}" not found`);
     setScannerError(`Product ID "${scannedDeviceId}" not found`);
-    return;
+    return false;
   }
 
   console.log('Found Product:', productData);
@@ -325,58 +336,56 @@ const checkSoldDevices = useCallback(async (deviceIds, productId, lineIdx) => {
 
   if (scannerTarget) {
     const { modal, lineIdx, deviceIdx } = scannerTarget;
+    let newDeviceIdx;
+
     if (modal === 'add') {
       const ls = [...lines];
-      if (ls[lineIdx].deviceIds.includes(scannedDeviceId)) {
+      if (ls[lineIdx].deviceIds.some((id, i) => id.trim().toLowerCase() === scannedDeviceId.toLowerCase())) {
         toast.error(`Product ID "${scannedDeviceId}" already exists in this line`);
         setScannerError(`Product ID "${scannedDeviceId}" already exists`);
-        return;
+        return false;
       }
       ls[lineIdx] = {
         ...ls[lineIdx],
         dynamic_product_id: Number(productData.id),
         unit_price: Number(productData.selling_price),
-        deviceIds: [...ls[lineIdx].deviceIds.slice(0, deviceIdx), scannedDeviceId, ...ls[lineIdx].deviceIds.slice(deviceIdx + 1)],
-        deviceSizes: [...ls[lineIdx].deviceSizes.slice(0, deviceIdx), (idIndex !== -1 ? deviceSizes[idIndex] || '' : ''), ...ls[lineIdx].deviceSizes.slice(deviceIdx + 1)],
-        quantity: ls[lineIdx].isQuantityManual ? ls[lineIdx].quantity : (ls[lineIdx].deviceIds.filter(id => id.trim()).length || 1),
+        deviceIds: [...ls[lineIdx].deviceIds.slice(0, deviceIdx), scannedDeviceId, ...ls[lineIdx].deviceIds.slice(deviceIdx + 1), ''],
+        deviceSizes: [...ls[lineIdx].deviceSizes.slice(0, deviceIdx), (idIndex !== -1 ? deviceSizes[idIndex] || '' : ''), ...ls[lineIdx].deviceSizes.slice(deviceIdx + 1), ''],
+        quantity: ls[lineIdx].isQuantityManual ? ls[lineIdx].quantity : (ls[lineIdx].deviceIds.filter(id => id.trim()).length + 1 || 1),
       };
       console.log('Updated Lines:', ls);
       setLines(ls);
+      newDeviceIdx = ls[lineIdx].deviceIds.length - 1;
       checkSoldDevices(deviceIds, productData.id, lineIdx);
     } else if (modal === 'edit') {
-      if (saleForm.deviceIds.some((id, i) => i !== deviceIdx && id.trim() === scannedDeviceId)) {
+      if (saleForm.deviceIds.some((id, i) => i !== deviceIdx && id.trim().toLowerCase() === scannedDeviceId.toLowerCase())) {
         toast.error(`Product ID "${scannedDeviceId}" already exists in this sale`);
         setScannerError(`Product ID "${scannedDeviceId}" already exists`);
-        return;
+        return false;
       }
       const updatedForm = {
         ...saleForm,
         dynamic_product_id: Number(productData.id),
         unit_price: Number(productData.selling_price),
-        deviceIds: [...saleForm.deviceIds.slice(0, deviceIdx), scannedDeviceId, ...saleForm.deviceIds.slice(deviceIdx + 1)],
-        deviceSizes: [...saleForm.deviceSizes.slice(0, deviceIdx), (idIndex !== -1 ? deviceSizes[idIndex] || '' : ''), ...saleForm.deviceSizes.slice(deviceIdx + 1)],
-        quantity: saleForm.isQuantityManual ? saleForm.quantity : (saleForm.deviceIds.filter(id => id.trim()).length || 1),
+        deviceIds: [...saleForm.deviceIds.slice(0, deviceIdx), scannedDeviceId, ...saleForm.deviceIds.slice(deviceIdx + 1), ''],
+        deviceSizes: [...saleForm.deviceSizes.slice(0, deviceIdx), (idIndex !== -1 ? deviceSizes[idIndex] || '' : ''), ...saleForm.deviceSizes.slice(deviceIdx + 1), ''],
+        quantity: saleForm.isQuantityManual ? saleForm.quantity : (saleForm.deviceIds.filter(id => id.trim()).length + 1 || 1),
       };
       console.log('Updated Sale Form:', updatedForm);
       setSaleForm(updatedForm);
+      newDeviceIdx = updatedForm.deviceIds.length - 1;
       checkSoldDevices(deviceIds, productData.id, 0);
     }
 
-    setScannerTarget(null);
-    setShowScanner(false);
+    setScannerTarget({ modal, lineIdx, deviceIdx: newDeviceIdx });
     setScannerError(null);
-    setScannerLoading(false);
     toast.success(`Scanned Product ID: ${scannedDeviceId}`);
-  } else {
-    console.error('No scanner target set');
-    toast.error('No scanner target set');
+    return true;
   }
+  console.error('No scanner target set');
+  toast.error('No scanner target set');
+  return false;
 };
-
-
-
-
-
 
 
 
