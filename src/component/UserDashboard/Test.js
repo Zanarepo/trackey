@@ -4,7 +4,7 @@ import {
   FaTrashAlt,
   FaFileCsv,
   FaFilePdf,
-
+  FaEdit,
   FaCamera,
 } from 'react-icons/fa';
 import { supabase } from '../../supabaseClient';
@@ -459,7 +459,6 @@ const onScanSuccess = async (scannedDeviceId) => {
   toast.error('No scanner target set');
   return false;
 };
-
 
 
 
@@ -1173,88 +1172,144 @@ const handleLineChange = async (lineIdx, field, value, deviceIdx = null, isBlur 
     setDetailPage(1);
     setShowDetailModal(true);
   };
-
-  // CRUD Operations
-  const createSale = async (e) => {
-    e.preventDefault();
-    try {
-      if (!paymentMethod) {
-        toast.error('Please select a payment method.');
+const createSale = async (e) => {
+  e.preventDefault();
+  try {
+    if (!paymentMethod) {
+      toast.error('Please select a payment method.');
+      return;
+    }
+    for (const line of lines) {
+      if (!line.dynamic_product_id || line.quantity <= 0 || line.unit_price <= 0) {
+        toast.error('Please fill in all required fields for each sale line.');
         return;
       }
-      for (const line of lines) {
-        if (!line.dynamic_product_id || line.quantity <= 0 || line.unit_price <= 0) {
-          toast.error('Please fill in all required fields for each sale line.');
+      const inv = inventory.find((i) => i.dynamic_product_id === line.dynamic_product_id);
+      if (!inv || inv.available_qty < line.quantity) {
+        const prod = products.find((p) => p.id === line.dynamic_product_id);
+        toast.error(`Insufficient stock for ${prod.name}: only ${inv?.available_qty || 0} available`);
+        return;
+      }
+      const deviceIds = line.deviceIds.filter(id => id.trim());
+      if (deviceIds.length > 0) {
+        const uniqueIds = new Set(deviceIds);
+        if (uniqueIds.size < deviceIds.length) {
+          toast.error('Duplicate Product IDs detected in this sale line');
           return;
         }
-        const inv = inventory.find((i) => i.dynamic_product_id === line.dynamic_product_id);
-        if (!inv || inv.available_qty < line.quantity) {
-          const prod = products.find((p) => p.id === line.dynamic_product_id);
-          toast.error(`Insufficient stock for ${prod.name}: only ${inv?.available_qty || 0} available`);
-          return;
-        }
-        const deviceIds = line.deviceIds.filter(id => id.trim());
-        if (deviceIds.length > 0) {
-          const uniqueIds = new Set(deviceIds);
-          if (uniqueIds.size < deviceIds.length) {
-            toast.error('Duplicate Product IDs detected in this sale line');
-            return;
+      }
+    }
+
+    const { data: grp, error: grpErr } = await supabase
+      .from('sale_groups')
+      .insert([{ store_id: storeId, total_amount: totalAmount, payment_method: paymentMethod }])
+      .select('id')
+      .single();
+    if (grpErr) throw new Error(`Sale group creation failed: ${grpErr.message}`);
+    const groupId = grp.id;
+
+    const inserts = lines.map((l) => ({
+      store_id: storeId,
+      sale_group_id: groupId,
+      dynamic_product_id: l.dynamic_product_id,
+      quantity: l.quantity,
+      unit_price: l.unit_price,
+      amount: l.quantity * l.unit_price,
+      device_id: l.deviceIds.filter(id => id.trim()).join(',') || null,
+      device_size: l.deviceSizes.map(size => size.trim() || '').join(',') || null,
+      payment_method: paymentMethod,
+    }));
+    const { error: insErr } = await supabase.from('dynamic_sales').insert(inserts);
+    if (insErr) throw new Error(`Sales insertion failed: ${insErr.message}`);
+
+    for (const line of lines) {
+      const inv = inventory.find((i) => i.dynamic_product_id === line.dynamic_product_id);
+      if (inv) {
+        const newQty = inv.available_qty - line.quantity;
+        const { error } = await supabase
+          .from('dynamic_inventory')
+          .update({ available_qty: newQty })
+          .eq('dynamic_product_id', line.dynamic_product_id)
+          .eq('store_id', storeId);
+        if (error) toast.error(`Inventory update failed for product ${line.dynamic_product_id}`);
+        setInventory((prev) =>
+          prev.map((i) =>
+            i.dynamic_product_id === line.dynamic_product_id ? { ...i, available_qty: newQty } : i
+          )
+        );
+      }
+    }
+
+    // Update dynamic_product.status to 'Sold' for products with device IDs
+    for (const line of lines) {
+      const deviceIds = line.deviceIds.filter(id => id.trim()).map(id => id.trim().replace(/\s+/g, ''));
+      if (deviceIds.length > 0) {
+        for (const deviceId of deviceIds) {
+          // Skip if already sold
+          const { data: soldData, error: soldError } = await supabase
+            .from('dynamic_sales')
+            .select('device_id')
+            .eq('device_id', deviceId)
+            .eq('store_id', storeId)
+            .limit(1);
+          if (soldError) {
+            console.error(`Error checking sold status for deviceId ${deviceId}:`, soldError);
+            toast.error(`Failed to check sold status for Product ID ${deviceId}`);
+            continue;
+          }
+          if (soldData && soldData.length > 0) {
+            console.log(`Device ID ${deviceId} already sold, skipping status update`);
+            continue;
+          }
+
+          // Fetch product
+          const { data: productData, error: productError } = await supabase
+            .from('dynamic_product')
+            .select('id, status')
+            .eq('store_id', storeId)
+            .ilike('dynamic_product_imeis', `%${deviceId}%`)
+            .limit(1);
+          if (productError) {
+            console.error(`Error fetching product for deviceId ${deviceId}:`, productError);
+            toast.error(`Failed to fetch product for Product ID ${deviceId}`);
+            continue;
+          }
+          if (!productData || productData.length === 0) {
+            console.warn(`No product found for deviceId ${deviceId}`);
+            toast.warn(`No product found for Product ID ${deviceId}`);
+            continue;
+          }
+
+          // Update status
+          if (productData[0].status !== 'Sold') {
+            const { error: updateError } = await supabase
+              .from('dynamic_product')
+              .update({ status: 'Sold' })
+              .eq('id', productData[0].id)
+              .eq('store_id', storeId);
+            if (updateError) {
+              console.error(`Error updating status for deviceId ${deviceId}:`, updateError);
+              toast.error(`Failed to update status for Product ID ${deviceId}`);
+            } else {
+              console.log(`Set dynamic_product.status to 'Sold' for product ${productData[0].id}, deviceId: ${deviceId}`);
+            }
           }
         }
       }
-
-      const { data: grp, error: grpErr } = await supabase
-        .from('sale_groups')
-        .insert([{ store_id: storeId, total_amount: totalAmount, payment_method: paymentMethod }])
-        .select('id')
-        .single();
-      if (grpErr) throw new Error(`Sale group creation failed: ${grpErr.message}`);
-      const groupId = grp.id;
-
-      const inserts = lines.map((l) => ({
-        store_id: storeId,
-        sale_group_id: groupId,
-        dynamic_product_id: l.dynamic_product_id,
-        quantity: l.quantity,
-        unit_price: l.unit_price,
-        amount: l.quantity * l.unit_price,
-        device_id: l.deviceIds.filter(id => id.trim()).join(',') || null,
-        device_size: l.deviceSizes.map(size => size.trim() || '').join(',') || null,
-        payment_method: paymentMethod,
-      }));
-      const { error: insErr } = await supabase.from('dynamic_sales').insert(inserts);
-      if (insErr) throw new Error(`Sales insertion failed: ${insErr.message}`);
-
-      for (const line of lines) {
-        const inv = inventory.find((i) => i.dynamic_product_id === line.dynamic_product_id);
-        if (inv) {
-          const newQty = inv.available_qty - line.quantity;
-          const { error } = await supabase
-            .from('dynamic_inventory')
-            .update({ available_qty: newQty })
-            .eq('dynamic_product_id', line.dynamic_product_id)
-            .eq('store_id', storeId);
-          if (error) toast.error(`Inventory update failed for product ${line.dynamic_product_id}`);
-          setInventory((prev) =>
-            prev.map((i) =>
-              i.dynamic_product_id === line.dynamic_product_id ? { ...i, available_qty: newQty } : i
-            )
-          );
-        }
-      }
-
-      toast.success('Sale added successfully!');
-      stopScanner();
-      setShowAdd(false);
-      setLines([{ dynamic_product_id: '', quantity: 1, unit_price: '', deviceIds: [''], deviceSizes: [''], isQuantityManual: false }]);
-      setPaymentMethod('Cash');
-      fetchSales();
-    } catch (err) {
-      toast.error(err.message);
     }
-  };
 
-  const saveEdit = async () => {
+    toast.success('Sale added successfully!');
+    stopScanner();
+    setShowAdd(false);
+    setLines([{ dynamic_product_id: '', quantity: 1, unit_price: '', deviceIds: [''], deviceSizes: [''], isQuantityManual: false }]);
+    setPaymentMethod('Cash');
+    fetchSales();
+  } catch (err) {
+    toast.error(err.message);
+  }
+};
+
+const saveEdit = async () => {
   try {
     const originalSale = sales.find((s) => s.id === editing);
     if (!originalSale) throw new Error('Sale not found');
@@ -1269,7 +1324,7 @@ const handleLineChange = async (lineIdx, field, value, deviceIdx = null, isBlur 
       }
     }
 
-    const deviceIds = saleForm.deviceIds.filter(id => id.trim());
+    const deviceIds = saleForm.deviceIds.filter(id => id.trim()).map(id => id.trim().replace(/\s+/g, ''));
     if (deviceIds.length > 0) {
       const uniqueIds = new Set(deviceIds);
       if (uniqueIds.size < deviceIds.length) {
@@ -1310,6 +1365,61 @@ const handleLineChange = async (lineIdx, field, value, deviceIdx = null, isBlur 
       }
     }
 
+    // Update dynamic_product.status to 'Sold' for device IDs in the edited sale
+    if (deviceIds.length > 0) {
+      for (const deviceId of deviceIds) {
+        // Skip if already sold
+        const { data: soldData, error: soldError } = await supabase
+          .from('dynamic_sales')
+          .select('device_id')
+          .eq('device_id', deviceId)
+          .eq('store_id', storeId)
+          .limit(1);
+        if (soldError) {
+          console.error(`Error checking sold status for deviceId ${deviceId}:`, soldError);
+          toast.error(`Failed to check sold status for Product ID ${deviceId}`);
+          continue;
+        }
+        if (soldData && soldData.length > 0) {
+          console.log(`Device ID ${deviceId} already sold, skipping status update`);
+          continue;
+        }
+
+        // Fetch product
+        const { data: productData, error: productError } = await supabase
+          .from('dynamic_product')
+          .select('id, status')
+          .eq('store_id', storeId)
+          .ilike('dynamic_product_imeis', `%${deviceId}%`)
+          .limit(1);
+        if (productError) {
+          console.error(`Error fetching product for deviceId ${deviceId}:`, productError);
+          toast.error(`Failed to fetch product for Product ID ${deviceId}`);
+          continue;
+        }
+        if (!productData || productData.length === 0) {
+          console.warn(`No product found for deviceId ${deviceId}`);
+          toast.warn(`No product found for Product ID ${deviceId}`);
+          continue;
+        }
+
+        // Update status
+        if (productData[0].status !== 'Sold') {
+          const { error: updateError } = await supabase
+            .from('dynamic_product')
+            .update({ status: 'Sold' })
+            .eq('id', productData[0].id)
+            .eq('store_id', storeId);
+          if (updateError) {
+            console.error(`Error updating status for deviceId ${deviceId}:`, updateError);
+            toast.error(`Failed to update status for Product ID ${deviceId}`);
+          } else {
+            console.log(`Set dynamic_product.status to 'Sold' for product ${productData[0].id}, deviceId: ${deviceId}`);
+          }
+        }
+      }
+    }
+
     toast.success('Sale updated successfully!');
     stopScanner();
     setEditing(null);
@@ -1319,7 +1429,33 @@ const handleLineChange = async (lineIdx, field, value, deviceIdx = null, isBlur 
   }
 };
 
+  const deleteSale = async (s) => {
+    if (!window.confirm(`Delete sale #${s.id}?`)) return;
+    try {
+      const { error } = await supabase.from('dynamic_sales').delete().eq('id', s.id);
+      if (error) throw new Error(`Deletion failed: ${error.message}`);
 
+      const inv = inventory.find((i) => i.dynamic_product_id === s.dynamic_product_id);
+      if (inv) {
+        const newQty = inv.available_qty + s.quantity;
+        await supabase
+          .from('dynamic_inventory')
+          .update({ available_qty: newQty })
+          .eq('dynamic_product_id', s.dynamic_product_id)
+          .eq('store_id', storeId);
+        setInventory((prev) =>
+          prev.map((i) =>
+            i.dynamic_product_id === s.dynamic_product_id ? { ...i, available_qty: newQty } : i
+          )
+        );
+      }
+
+      toast.success('Sale deleted successfully!');
+      fetchSales();
+    } catch (err) {
+      toast.error(err.message);
+    }
+  };
 
   // Export Functions
   const exportCSV = () => {
@@ -1422,7 +1558,6 @@ const handleLineChange = async (lineIdx, field, value, deviceIdx = null, isBlur 
     <div className="p-2 max-w-7xl mx-auto dark:bg-gray-900 dark:text-white mt-48">
       <ToastContainer position="top-right" autoClose={3000} />
    
-
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 gap-4">
         <div className="flex flex-col sm:flex-row sm:items-center gap-4 w-full sm:w-auto">
@@ -1448,7 +1583,7 @@ const handleLineChange = async (lineIdx, field, value, deviceIdx = null, isBlur 
             />
           )}
         </div>
-       <button
+        <button
   onClick={() => setShowAdd(true)}
   className="flex items-center justify-center gap-2 px-4 py-2 text-sm sm:text-base bg-indigo-600 text-white rounded-md hover:bg-indigo-700 w-full sm:w-auto new-sale-button"
 >
@@ -1935,7 +2070,7 @@ const handleLineChange = async (lineIdx, field, value, deviceIdx = null, isBlur 
            <table className="min-w-full bg-white dark:bg-gray-900 divide-y divide-gray-200">
              <thead className="bg-gray-100 dark:bg-gray-800">
                <tr>
-                 {['Product', 'Quantity', 'Unit Price', 'Amount', 'Payment', 'Product IDs/Sizes', 'Date Sold'].map((h) => (
+                 {['Product', 'Quantity', 'Unit Price', 'Amount', 'Payment', 'Product IDs/Sizes', 'Date Sold', 'Actions'].map((h) => (
                    <th
                      key={h}
                      className="px-4 py-2 text-left text-sm font-semibold text-gray-700 dark:text-gray-200"
@@ -1946,7 +2081,7 @@ const handleLineChange = async (lineIdx, field, value, deviceIdx = null, isBlur 
                </tr>
              </thead>
              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-               {paginatedSales.map((s) => (
+               {paginatedSales.map((s, idx) => (
                  <tr key={s.id}>
                    <td className="px-4 py-2 text-sm">{s.dynamic_product.name}</td>
                    <td className="px-4 py-2 text-sm">{s.quantity}</td>
@@ -1968,8 +2103,37 @@ const handleLineChange = async (lineIdx, field, value, deviceIdx = null, isBlur 
                    </td>
                    <td className="px-4 py-2 text-sm">{new Date(s.sold_at).toLocaleString()}</td>
                    <td className="px-4 py-2 text-sm flex gap-2">
-                  
-                     
+                   <button
+  type="button"
+  onClick={() => {
+    setEditing(s.id);
+    setSaleForm({
+      dynamic_product_id: s.dynamic_product_id,
+      quantity: s.quantity,
+      unit_price: s.unit_price,
+      deviceIds: s.deviceIds.length > 0 ? s.deviceIds : [''],
+      deviceSizes: s.deviceSizes.length > 0 ? s.deviceSizes : [''],
+      payment_method: s.payment_method,
+      isQuantityManual: false,
+    });
+    const product = products.find(p => p.id === s.dynamic_product_id);
+    if (product) {
+      checkSoldDevices(product.deviceIds, s.dynamic_product_id, 0);
+    }
+  }}
+  className={`p-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 edit-button-${idx}`}
+  title="Edit sale"
+>
+  <FaEdit />
+</button>
+                     <button
+                       type="button"
+                       onClick={() => deleteSale(s)}
+                       className="p-2 bg-red-500 text-white rounded hover:bg-red-600"
+                       title="Delete sale"
+                     >
+                       <FaTrashAlt />
+                     </button>
                    </td>
                  </tr>
                ))}
