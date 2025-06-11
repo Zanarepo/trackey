@@ -463,6 +463,7 @@ const onScanSuccess = async (scannedDeviceId) => {
 
 
 
+
     const onScanFailure = (error) => {
       if (error.includes('No MultiFormat Readers were able to detect the code') ||
           error.includes('No QR code found') ||
@@ -1172,13 +1173,23 @@ const handleLineChange = async (lineIdx, field, value, deviceIdx = null, isBlur 
     setDetailPage(1);
     setShowDetailModal(true);
   };
-const createSale = async (e) => {
+
+  const createSale = async (e) => {
   e.preventDefault();
   try {
     if (!paymentMethod) {
       toast.error('Please select a payment method.');
       return;
     }
+    if (!storeId) {
+      console.error('Store ID is undefined or null');
+      toast.error('Invalid store configuration');
+      return;
+    }
+    console.log('Processing sale with storeId:', storeId);
+
+    // Validate all lines and collect device IDs
+    const allDeviceIds = [];
     for (const line of lines) {
       if (!line.dynamic_product_id || line.quantity <= 0 || line.unit_price <= 0) {
         toast.error('Please fill in all required fields for each sale line.');
@@ -1190,16 +1201,71 @@ const createSale = async (e) => {
         toast.error(`Insufficient stock for ${prod.name}: only ${inv?.available_qty || 0} available`);
         return;
       }
-      const deviceIds = line.deviceIds.filter(id => id.trim());
+      const deviceIds = line.deviceIds.filter(id => id.trim()).map(id => id.trim().replace(/\s+/g, '').replace(/[,]+/g, ''));
       if (deviceIds.length > 0) {
         const uniqueIds = new Set(deviceIds);
         if (uniqueIds.size < deviceIds.length) {
           toast.error('Duplicate Product IDs detected in this sale line');
           return;
         }
+        allDeviceIds.push(...deviceIds);
       }
     }
 
+    // Validate device IDs against dynamic_product and dynamic_sales
+    if (allDeviceIds.length > 0) {
+      console.log('Validating device IDs:', allDeviceIds);
+
+      // Check if device IDs exist in dynamic_product
+      const { data: productCheck, error: productError } = await supabase
+        .from('dynamic_product')
+        .select('id, dynamic_product_imeis')
+        .eq('store_id', storeId);
+      if (productError) {
+        console.error('Error validating device IDs against dynamic_product:', productError);
+        toast.error('Failed to validate Product IDs');
+        return;
+      }
+
+      const validDeviceIds = new Set(
+        productCheck.flatMap(p => 
+          (p.dynamic_product_imeis || '').split(',').map(id => id.trim().replace(/\s+/g, '').replace(/[,]+/g, ''))
+        ).filter(id => id)
+      );
+      console.log('Valid device IDs from dynamic_product:', [...validDeviceIds]);
+      const invalidDeviceIds = allDeviceIds.filter(id => !validDeviceIds.has(id));
+      if (invalidDeviceIds.length > 0) {
+        console.warn('Invalid device IDs:', invalidDeviceIds);
+        toast.error(`Invalid Product IDs: ${invalidDeviceIds.join(', ')}`);
+        return;
+      }
+
+      // Check if device IDs are already sold in dynamic_sales
+      const { data: salesCheck, error: salesError } = await supabase
+        .from('dynamic_sales')
+        .select('device_id')
+        .eq('store_id', storeId);
+      if (salesError) {
+        console.error('Error checking sold device IDs:', salesError);
+        toast.error('Failed to check sold status of Product IDs');
+        return;
+      }
+
+      const soldDeviceIds = new Set(
+        salesCheck.flatMap(s => 
+          (s.device_id || '').split(',').map(id => id.trim().replace(/\s+/g, '').replace(/[,]+/g, ''))
+        ).filter(id => id)
+      );
+      console.log('Sold device IDs from dynamic_sales:', [...soldDeviceIds]);
+      const alreadySoldIds = allDeviceIds.filter(id => soldDeviceIds.has(id));
+      if (alreadySoldIds.length > 0) {
+        console.warn('Already sold device IDs:', alreadySoldIds);
+        toast.error(`Product ID${alreadySoldIds.length > 1 ? 's' : ''} already sold: ${alreadySoldIds.join(', ')}`);
+        return;
+      }
+    }
+
+    // Create sale group
     const { data: grp, error: grpErr } = await supabase
       .from('sale_groups')
       .insert([{ store_id: storeId, total_amount: totalAmount, payment_method: paymentMethod }])
@@ -1208,6 +1274,7 @@ const createSale = async (e) => {
     if (grpErr) throw new Error(`Sale group creation failed: ${grpErr.message}`);
     const groupId = grp.id;
 
+    // Insert sales
     const inserts = lines.map((l) => ({
       store_id: storeId,
       sale_group_id: groupId,
@@ -1215,13 +1282,14 @@ const createSale = async (e) => {
       quantity: l.quantity,
       unit_price: l.unit_price,
       amount: l.quantity * l.unit_price,
-      device_id: l.deviceIds.filter(id => id.trim()).join(',') || null,
+      device_id: l.deviceIds.filter(id => id.trim()).map(id => id.trim().replace(/\s+/g, '')).join(',') || null,
       device_size: l.deviceSizes.map(size => size.trim() || '').join(',') || null,
       payment_method: paymentMethod,
     }));
     const { error: insErr } = await supabase.from('dynamic_sales').insert(inserts);
     if (insErr) throw new Error(`Sales insertion failed: ${insErr.message}`);
 
+    // Update inventory
     for (const line of lines) {
       const inv = inventory.find((i) => i.dynamic_product_id === line.dynamic_product_id);
       if (inv) {
@@ -1240,64 +1308,6 @@ const createSale = async (e) => {
       }
     }
 
-    // Update dynamic_product.status to 'Sold' for products with device IDs
-    for (const line of lines) {
-      const deviceIds = line.deviceIds.filter(id => id.trim()).map(id => id.trim().replace(/\s+/g, ''));
-      if (deviceIds.length > 0) {
-        for (const deviceId of deviceIds) {
-          // Skip if already sold
-          const { data: soldData, error: soldError } = await supabase
-            .from('dynamic_sales')
-            .select('device_id')
-            .eq('device_id', deviceId)
-            .eq('store_id', storeId)
-            .limit(1);
-          if (soldError) {
-            console.error(`Error checking sold status for deviceId ${deviceId}:`, soldError);
-            toast.error(`Failed to check sold status for Product ID ${deviceId}`);
-            continue;
-          }
-          if (soldData && soldData.length > 0) {
-            console.log(`Device ID ${deviceId} already sold, skipping status update`);
-            continue;
-          }
-
-          // Fetch product
-          const { data: productData, error: productError } = await supabase
-            .from('dynamic_product')
-            .select('id, status')
-            .eq('store_id', storeId)
-            .ilike('dynamic_product_imeis', `%${deviceId}%`)
-            .limit(1);
-          if (productError) {
-            console.error(`Error fetching product for deviceId ${deviceId}:`, productError);
-            toast.error(`Failed to fetch product for Product ID ${deviceId}`);
-            continue;
-          }
-          if (!productData || productData.length === 0) {
-            console.warn(`No product found for deviceId ${deviceId}`);
-            toast.warn(`No product found for Product ID ${deviceId}`);
-            continue;
-          }
-
-          // Update status
-          if (productData[0].status !== 'Sold') {
-            const { error: updateError } = await supabase
-              .from('dynamic_product')
-              .update({ status: 'Sold' })
-              .eq('id', productData[0].id)
-              .eq('store_id', storeId);
-            if (updateError) {
-              console.error(`Error updating status for deviceId ${deviceId}:`, updateError);
-              toast.error(`Failed to update status for Product ID ${deviceId}`);
-            } else {
-              console.log(`Set dynamic_product.status to 'Sold' for product ${productData[0].id}, deviceId: ${deviceId}`);
-            }
-          }
-        }
-      }
-    }
-
     toast.success('Sale added successfully!');
     stopScanner();
     setShowAdd(false);
@@ -1305,12 +1315,22 @@ const createSale = async (e) => {
     setPaymentMethod('Cash');
     fetchSales();
   } catch (err) {
+    console.error('Sale creation failed:', err);
     toast.error(err.message);
   }
 };
 
-const saveEdit = async () => {
+
+
+  const saveEdit = async () => {
   try {
+    if (!storeId) {
+      console.error('Store ID is undefined or null');
+      toast.error('Invalid store configuration');
+      return;
+    }
+    console.log('Processing sale edit with storeId:', storeId);
+
     const originalSale = sales.find((s) => s.id === editing);
     if (!originalSale) throw new Error('Sale not found');
 
@@ -1324,11 +1344,61 @@ const saveEdit = async () => {
       }
     }
 
-    const deviceIds = saleForm.deviceIds.filter(id => id.trim()).map(id => id.trim().replace(/\s+/g, ''));
+    const deviceIds = saleForm.deviceIds.filter(id => id.trim()).map(id => id.trim().replace(/\s+/g, '').replace(/[,]+/g, ''));
     if (deviceIds.length > 0) {
       const uniqueIds = new Set(deviceIds);
       if (uniqueIds.size < deviceIds.length) {
         toast.error('Duplicate Product IDs detected in this sale');
+        return;
+      }
+      console.log('Validating device IDs for edit:', deviceIds);
+
+      // Check if device IDs exist in dynamic_product
+      const { data: productCheck, error: productError } = await supabase
+        .from('dynamic_product')
+        .select('id, dynamic_product_imeis')
+        .eq('store_id', storeId);
+      if (productError) {
+        console.error('Error validating device IDs against dynamic_product:', productError);
+        toast.error('Failed to validate Product IDs');
+        return;
+      }
+
+      const validDeviceIds = new Set(
+        productCheck.flatMap(p => 
+          (p.dynamic_product_imeis || '').split(',').map(id => id.trim().replace(/\s+/g, '').replace(/[,]+/g, ''))
+        ).filter(id => id)
+      );
+      console.log('Valid device IDs from dynamic_product:', [...validDeviceIds]);
+      const invalidDeviceIds = deviceIds.filter(id => !validDeviceIds.has(id));
+      if (invalidDeviceIds.length > 0) {
+        console.warn('Invalid device IDs:', invalidDeviceIds);
+        toast.error(`Invalid Product IDs: ${invalidDeviceIds.join(', ')}`);
+        return;
+      }
+
+      // Check if device IDs are already sold in dynamic_sales (excluding current sale)
+      const { data: salesCheck, error: salesError } = await supabase
+        .from('dynamic_sales')
+        .select('id, device_id')
+        .eq('store_id', storeId)
+        .neq('id', editing);
+      if (salesError) {
+        console.error('Error checking sold device IDs:', salesError);
+        toast.error('Failed to check sold status of Product IDs');
+        return;
+      }
+
+      const soldDeviceIds = new Set(
+        salesCheck.flatMap(s => 
+          (s.device_id || '').split(',').map(id => id.trim().replace(/\s+/g, '').replace(/[,]+/g, ''))
+        ).filter(id => id)
+      );
+      console.log('Sold device IDs from dynamic_sales:', [...soldDeviceIds]);
+      const alreadySoldIds = deviceIds.filter(id => soldDeviceIds.has(id));
+      if (alreadySoldIds.length > 0) {
+        console.warn('Already sold device IDs:', alreadySoldIds);
+        toast.error(`Product ID${alreadySoldIds.length > 1 ? 's' : ''} already sold: ${alreadySoldIds.join(', ')}`);
         return;
       }
     }
@@ -1365,66 +1435,12 @@ const saveEdit = async () => {
       }
     }
 
-    // Update dynamic_product.status to 'Sold' for device IDs in the edited sale
-    if (deviceIds.length > 0) {
-      for (const deviceId of deviceIds) {
-        // Skip if already sold
-        const { data: soldData, error: soldError } = await supabase
-          .from('dynamic_sales')
-          .select('device_id')
-          .eq('device_id', deviceId)
-          .eq('store_id', storeId)
-          .limit(1);
-        if (soldError) {
-          console.error(`Error checking sold status for deviceId ${deviceId}:`, soldError);
-          toast.error(`Failed to check sold status for Product ID ${deviceId}`);
-          continue;
-        }
-        if (soldData && soldData.length > 0) {
-          console.log(`Device ID ${deviceId} already sold, skipping status update`);
-          continue;
-        }
-
-        // Fetch product
-        const { data: productData, error: productError } = await supabase
-          .from('dynamic_product')
-          .select('id, status')
-          .eq('store_id', storeId)
-          .ilike('dynamic_product_imeis', `%${deviceId}%`)
-          .limit(1);
-        if (productError) {
-          console.error(`Error fetching product for deviceId ${deviceId}:`, productError);
-          toast.error(`Failed to fetch product for Product ID ${deviceId}`);
-          continue;
-        }
-        if (!productData || productData.length === 0) {
-          console.warn(`No product found for deviceId ${deviceId}`);
-          toast.warn(`No product found for Product ID ${deviceId}`);
-          continue;
-        }
-
-        // Update status
-        if (productData[0].status !== 'Sold') {
-          const { error: updateError } = await supabase
-            .from('dynamic_product')
-            .update({ status: 'Sold' })
-            .eq('id', productData[0].id)
-            .eq('store_id', storeId);
-          if (updateError) {
-            console.error(`Error updating status for deviceId ${deviceId}:`, updateError);
-            toast.error(`Failed to update status for Product ID ${deviceId}`);
-          } else {
-            console.log(`Set dynamic_product.status to 'Sold' for product ${productData[0].id}, deviceId: ${deviceId}`);
-          }
-        }
-      }
-    }
-
     toast.success('Sale updated successfully!');
     stopScanner();
     setEditing(null);
     fetchSales();
   } catch (err) {
+    console.error('Sale edit failed:', err);
     toast.error(err.message);
   }
 };
@@ -1597,7 +1613,7 @@ const saveEdit = async () => {
   <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 z-50">
     <form
       onSubmit={createSale}
-      className="bg-white dark:bg-gray-900 p-4 sm:p-6 rounded-lg shadow-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto mt-28"
+      className="bg-white dark:bg-gray-900 p-4 sm:p-6 rounded-lg shadow-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto"
     >
       <h2 className="text-xl sm:text-2xl font-bold mb-4">Add Sale</h2>
 
@@ -1745,24 +1761,31 @@ const saveEdit = async () => {
 
       <div className="mb-4 text-lg font-semibold">Total: ₦{totalAmount.toFixed(2)}</div>
 
-      <div className="flex flex-col sm:flex-row justify-end gap-2">
-        <button
-          type="button"
-          onClick={() => {
-            stopScanner();
-            setShowAdd(false);
-          }}
-          className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600"
-        >
-          Cancel
-        </button>
-        <button
-          type="submit"
-          className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
-        >
-          Save Sale
-        </button>
-      </div>
+     <div className="flex flex-row justify-end gap-2 flex-wrap">
+<div className="w-full flex justify-center">
+  <div className="flex flex-row gap-2 flex-wrap">
+    <button
+      type="button"
+      onClick={() => {
+        stopScanner();
+        setShowAdd(false);
+      }}
+      className="px-3 py-1.5 text-sm bg-gray-200 rounded hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600"
+    >
+      Cancel
+    </button>
+    <button
+      type="submit"
+      className="px-3 py-1.5 text-sm bg-indigo-600 text-white rounded hover:bg-indigo-700"
+    >
+      Save Sale
+    </button>
+  </div>
+</div>
+
+
+</div>
+
     </form>
   </div>
 )}
