@@ -897,7 +897,7 @@ const formatCurrency = (value) =>
   };
 
   return (
-    <div className="p-0 mt-4 dark:bg-gray-900 dark:text-white mt-48">
+    <div className="p-0 mt-4 dark:bg-gray-900 dark:text-white">
       <ToastContainer />
       <div className="flex flex-col sm:flex-row gap-2 mb-4 px-2 sm:px-0">
         <input
