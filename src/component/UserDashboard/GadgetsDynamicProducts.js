@@ -897,7 +897,7 @@ const formatCurrency = (value) =>
   };
 
   return (
-    <div className="p-0 mt-4 dark:bg-gray-900 dark:text-white">
+    <div className="p-0 mt-4 dark:bg-gray-900 dark:text-white mt-48">
       <ToastContainer />
       <div className="flex flex-col sm:flex-row gap-2 mb-4 px-2 sm:px-0">
         <input
@@ -916,70 +916,77 @@ const formatCurrency = (value) =>
         </button>
       </div>
 
-      {showAdd && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
-          <form
-            onSubmit={createProducts}
-            className="bg-white dark:bg-gray-900 max-w-xl w-full max-h-[80vh] overflow-y-auto p-1 rounded-lg shadow-lg space-y-6 mt-16 pt-2"
-          >
-            <h2 className="text-2xl font-semibold text-gray-800 dark:text-white">Add Products</h2>
+     {showAdd && (
+  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+    <form
+      onSubmit={createProducts}
+     className="bg-white dark:bg-gray-900 w-full max-w-5xl sm:rounded-lg shadow-lg space-y-6 p-4 sm:p-6 max-h-[90vh] overflow-y-auto"
 
-            {addForm.map((p, pi) => (
-              <div
-                key={pi}
-                className="bg-white dark:bg-gray-900 p-6 rounded-lg shadow-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto"
-              >
-                {addForm.length > 1 && (
-                  <button
-                    type="button"
-                    onClick={() => removeProductForm(pi)}
-                    className="absolute top-2 right-2 text-red-500 hover:text-red-700 text-lg"
-                    title="Remove this product"
-                  >
-                    <FaTrashAlt />
-                  </button>
-                )}
+    >
+      <h2 className="text-2xl font-semibold text-gray-800 dark:text-white">Add Products</h2>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <input
-                    type="text"
-                    placeholder="Product Name"
-                    value={p.name}
-                    onChange={(e) => handleAddChange(pi, 'name', e.target.value)}
-                    className="p-2 border rounded w-full dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                    required
-                  />
-                  <input
-                    type="text"
-                    placeholder="Supplier Name"
-                    value={p.suppliers_name}
-                    onChange={(e) => handleAddChange(pi, 'suppliers_name', e.target.value)}
-                    className="p-2 border rounded w-full dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                  />
-                  <textarea
-                    placeholder="Description"
-                    value={p.description}
-                    onChange={(e) => handleAddChange(pi, 'description', e.target.value)}
-                    className="p-2 border rounded w-full md:col-span-2 resize-none dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                    rows={3}
-                  />
-                  <input
-                    type="number"
-                    step="0.01"
-                    placeholder="Purchase Price"
-                    value={p.purchase_price}
-                    onChange={(e) => handleAddChange(pi, 'purchase_price', e.target.value)}
-                    className="p-2 border rounded w-full dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                  />
-                  <input
-                    type="number"
-                    step="0.01"
-                    placeholder="Selling Price"
-                    value={p.selling_price}
-                    onChange={(e) => handleAddChange(pi, 'selling_price', e.target.value)}
-                    className="p-2 border rounded w-full dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                  />
-                </div>
+      {addForm.map((p, pi) => (
+        <div
+          key={pi}
+          className="relative bg-gray-50 dark:bg-gray-800 p-6 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700"
+        >
+          {addForm.length > 1 && (
+            <button
+              type="button"
+              onClick={() => removeProductForm(pi)}
+              className="absolute top-4 right-4 text-red-500 hover:text-red-700 text-lg focus:outline-none"
+              title="Remove this product"
+            >
+              <FaTrashAlt />
+            </button>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <input
+              type="text"
+              placeholder="Product Name"
+              value={p.name}
+              onChange={(e) => handleAddChange(pi, 'name', e.target.value)}
+              className="p-2 border rounded w-full dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              required
+            />
+            <input
+              type="text"
+              placeholder="Supplier Name"
+              value={p.suppliers_name}
+              onChange={(e) => handleAddChange(pi, 'suppliers_name', e.target.value)}
+              className="p-2 border rounded w-full dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+            />
+            <textarea
+              placeholder="Description"
+              value={p.description}
+              onChange={(e) => handleAddChange(pi, 'description', e.target.value)}
+              className="p-2 border rounded w-full md:col-span-2 resize-none dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+              rows={3}
+            />
+            <input
+              type="number"
+              step="0.01"
+              placeholder="Purchase Price"
+              value={p.purchase_price}
+              onChange={(e) => handleAddChange(pi, 'purchase_price', e.target.value)}
+              className="p-2 border rounded w-full dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+            />
+            <input
+              type="number"
+              step="0.01"
+              placeholder="Selling Price"
+              value={p.selling_price}
+              onChange={(e) => handleAddChange(pi, 'selling_price', e.target.value)}
+              className="p-2 border rounded w-full dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+            />
+          </div>
+      
+    
+
+
+
+                
       <div className="mt-4">
         <label className="block font-semibold text-gray-700 dark:text-gray-300 mb-1">
           Product IDs and Sizes
