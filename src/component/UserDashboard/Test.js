@@ -20,7 +20,7 @@ function DynamicProducts() {
   const [search, setSearch] = useState('');
   const [showAdd, setShowAdd] = useState(false);
   const [addForm, setAddForm] = useState([
-    { name: '', description: '', purchase_price: '', purchase_qty: '', selling_price: '', suppliers_name: '', deviceIds: [''], deviceSizes: [''] },
+    { name: '', description: '', purchase_price: '', purchase_qty: '', selling_price: '', suppliers_name: '', deviceIds: [''], deviceSizes: [''], isQtyManuallySet: false},
   ]);
   const [editing, setEditing] = useState(null);
   const [editForm, setEditForm] = useState({
@@ -28,9 +28,11 @@ function DynamicProducts() {
     description: '',
     purchase_price: '',
     selling_price: '',
+    qty: '',
     suppliers_name: '',
     deviceIds: [],
     deviceSizes: [],
+    isQtyManuallySet: false,
   });
   const [showDetail, setShowDetail] = useState(null);
   const [soldDeviceIds, setSoldDeviceIds] = useState([]);
@@ -87,61 +89,76 @@ const formatCurrency = (value) =>
     }
   }, [showScanner, scannerTarget]);
 
-  // Process scanned barcode
   const processScannedBarcode = useCallback((scannedCode) => {
-    const trimmedCode = scannedCode.trim();
-    console.log('Processing barcode:', { trimmedCode });
+  const trimmedCode = scannedCode.trim();
+  console.log('Processing barcode:', { trimmedCode });
 
-    if (!trimmedCode) {
-      toast.error('Invalid barcode: Empty value');
-      setScannerError('Invalid barcode: Empty value');
-      return false;
-    }
-
-    if (scannerTarget) {
-      const { modal, productIndex, deviceIndex } = scannerTarget;
-      let newDeviceIndex;
-
-      if (modal === 'add') {
-        const form = [...addForm];
-        if (form[productIndex].deviceIds.some((id, i) => id.trim().toLowerCase() === trimmedCode.toLowerCase())) {
-          toast.error(`Barcode "${trimmedCode}" already exists in this product`);
-          setScannerError(`Barcode "${trimmedCode}" already exists`);
-          return false;
-        }
-        form[productIndex].deviceIds[deviceIndex] = trimmedCode;
-        form[productIndex].deviceIds.push('');
-        form[productIndex].deviceSizes[deviceIndex] = form[productIndex].deviceSizes[deviceIndex] || '';
-        form[productIndex].deviceSizes.push('');
-        setAddForm(form);
-        newDeviceIndex = form[productIndex].deviceIds.length - 1;
-      } else if (modal === 'edit') {
-        if (editForm.deviceIds.some((id, i) => id.trim().toLowerCase() === trimmedCode.toLowerCase())) {
-          toast.error(`Barcode "${trimmedCode}" already exists in this product`);
-          setScannerError(`Barcode "${trimmedCode}" already exists`);
-          return false;
-        }
-        const arrIds = [...editForm.deviceIds];
-        const arrSizes = [...editForm.deviceSizes];
-        arrIds[deviceIndex] = trimmedCode;
-        arrIds.push('');
-        arrSizes[deviceIndex] = arrSizes[deviceIndex] || '';
-        arrSizes.push('');
-        setEditForm((prev) => ({ ...prev, deviceIds: arrIds, deviceSizes: arrSizes }));
-        newDeviceIndex = arrIds.length - 1;
-      }
-
-      setScannerTarget({
-        modal,
-        productIndex,
-        deviceIndex: newDeviceIndex,
-      });
-      setScannerError(null);
-      toast.success(`Scanned barcode: ${trimmedCode}`);
-      return true;
-    }
+  if (!trimmedCode) {
+    toast.error('Invalid barcode: Empty value');
+    setScannerError('Invalid barcode: Empty value');
     return false;
-  }, [scannerTarget, addForm, editForm]);
+  }
+
+  if (scannerTarget) {
+    const { modal, productIndex, deviceIndex } = scannerTarget;
+    let newDeviceIndex;
+
+    if (modal === 'add') {
+      const form = [...addForm];
+      if (form[productIndex].deviceIds.some((id, i) => id.trim().toLowerCase() === trimmedCode.toLowerCase())) {
+        toast.error(`Barcode "${trimmedCode}" already exists in this product`);
+        setScannerError(`Barcode "${trimmedCode}" already exists`);
+        return false;
+      }
+      form[productIndex].deviceIds[deviceIndex] = trimmedCode;
+      form[productIndex].deviceIds.push('');
+      form[productIndex].deviceSizes[deviceIndex] = form[productIndex].deviceSizes[deviceIndex] || '';
+      form[productIndex].deviceSizes.push('');
+      if (!form[productIndex].isQtyManuallySet) {
+        const deviceCount = form[productIndex].deviceIds.filter((id) => id.trim()).length;
+        form[productIndex].qty = deviceCount.toString();
+      }
+      setAddForm(form);
+      newDeviceIndex = form[productIndex].deviceIds.length - 1;
+    } else if (modal === 'edit') {
+      if (editForm.deviceIds.some((id, i) => id.trim().toLowerCase() === trimmedCode.toLowerCase())) {
+        toast.error(`Barcode "${trimmedCode}" already exists in this product`);
+        setScannerError(`Barcode "${trimmedCode}" already exists`);
+        return false;
+      }
+      const arrIds = [...editForm.deviceIds];
+      const arrSizes = [...editForm.deviceSizes];
+      arrIds[deviceIndex] = trimmedCode;
+      arrIds.push('');
+      arrSizes[deviceIndex] = arrSizes[deviceIndex] || '';
+      arrSizes.push('');
+      const updatedForm = {
+        ...editForm,
+        deviceIds: arrIds,
+        deviceSizes: arrSizes,
+      };
+      if (!editForm.isQtyManuallySet) {
+        const deviceCount = arrIds.filter((id) => id.trim()).length;
+        updatedForm.qty = deviceCount.toString();
+      }
+      setEditForm(updatedForm);
+      newDeviceIndex = arrIds.length - 1;
+    }
+
+    setScannerTarget({
+      modal,
+      productIndex,
+      deviceIndex: newDeviceIndex,
+    });
+    setScannerError(null);
+    toast.success(`Scanned barcode: ${trimmedCode}`);
+    return true;
+  }
+  return false;
+}, [scannerTarget, addForm, editForm]);
+
+
+
 
   // External scanner input
   useEffect(() => {
@@ -379,30 +396,42 @@ const formatCurrency = (value) =>
   }, []);
 
   // Fetch products
-  const fetchProducts = useCallback(async () => {
-    if (!storeId) {
-      toast.error('Store ID not found');
-      return;
-    }
-    try {
-      const { data, error } = await supabase
-        .from('dynamic_product')
-        .select('id, name, description, purchase_price, purchase_qty, selling_price, suppliers_name, device_id, dynamic_product_imeis, device_size, created_at')
-        .eq('store_id', storeId)
-        .order('id', { ascending: true });
-      if (error) throw error;
-      const withIds = data.map((p) => ({
-        ...p,
-        deviceList: p.dynamic_product_imeis ? p.dynamic_product_imeis.split(',').filter((id) => id.trim()) : [],
-        sizeList: p.device_size ? p.device_size.split(',').filter((size) => size.trim()) : [],
-      }));
-      setProducts(withIds);
-      setFiltered(withIds);
-    } catch (error) {
-      console.error('Fetch products error:', error);
-      toast.error('Failed to fetch products');
-    }
-  }, [storeId]);
+const fetchProducts = useCallback(async () => {
+  if (!storeId) {
+    toast.error('Store ID not found');
+    return;
+  }
+  try {
+    const { data: productsData, error: productsError } = await supabase
+      .from('dynamic_product')
+      .select('id, name, description, purchase_price, purchase_qty, selling_price, suppliers_name, device_id, dynamic_product_imeis, device_size, created_at')
+      .eq('store_id', storeId)
+      .order('id', { ascending: true });
+    if (productsError) throw productsError;
+
+    const { data: inventoryData, error: inventoryError } = await supabase
+      .from('dynamic_inventory')
+      .select('dynamic_product_id, available_qty')
+      .eq('store_id', storeId);
+    if (inventoryError) throw inventoryError;
+
+    const inventoryMap = new Map(inventoryData.map((inv) => [inv.dynamic_product_id, inv.available_qty]));
+
+    const withIds = productsData.map((p) => ({
+      ...p,
+      deviceList: p.dynamic_product_imeis ? p.dynamic_product_imeis.split(',').filter((id) => id.trim()) : [],
+      sizeList: p.device_size ? p.device_size.split(',').filter((size) => size.trim()) : [],
+      available_qty: inventoryMap.get(p.id) ?? p.purchase_qty ?? p.dynamic_product_imeis?.split(',').filter((id) => id.trim()).length ?? 0,
+    }));
+    setProducts(withIds);
+    setFiltered(withIds);
+  } catch (error) {
+    console.error('Fetch products error:', error);
+    toast.error('Failed to fetch products');
+  }
+}, [storeId]);
+
+
 
   useEffect(() => {
     fetchProducts();
@@ -481,6 +510,8 @@ const formatCurrency = (value) =>
     }
   };
 
+
+
   // Handle Enter key for manual input
   const handleManualInputKeyDown = (e) => {
     if (e.key === 'Enter') {
@@ -489,50 +520,65 @@ const formatCurrency = (value) =>
     }
   };
 
-  // Remove device ID
-  const removeDeviceId = async (deviceId) => {
-    if (!showDetail) return;
-    if (!window.confirm(`Remove device ID ${deviceId} from ${showDetail.name}?`)) return;
-    try {
-      const index = showDetail.deviceList.indexOf(deviceId);
-      const updatedDeviceList = showDetail.deviceList.filter((id) => id !== deviceId);
-      const updatedSizeList = showDetail.sizeList.filter((_, i) => i !== index);
-      const { error } = await supabase
-        .from('dynamic_product')
-        .update({
-          dynamic_product_imeis: updatedDeviceList.join(','),
-          device_size: updatedSizeList.join(','),
-        })
-        .eq('id', showDetail.id);
-      if (error) throw error;
-      const { data: inv } = await supabase
+ const removeDeviceId = async (deviceId) => {
+  if (!showDetail) return;
+  if (!window.confirm(`Remove device ID ${deviceId} from ${showDetail.name}?`)) return;
+  try {
+    const index = showDetail.deviceList.indexOf(deviceId);
+    const updatedDeviceList = showDetail.deviceList.filter((id) => id !== deviceId);
+    const updatedSizeList = showDetail.sizeList.filter((_, i) => i !== index);
+    const { data: product, error: productError } = await supabase
+      .from('dynamic_product')
+      .select('purchase_qty')
+      .eq('id', showDetail.id)
+      .single();
+    if (productError) throw productError;
+
+    const currentQty = product.purchase_qty || updatedDeviceList.length;
+    const newQty = Math.max(0, currentQty - 1);
+
+    const { error } = await supabase
+      .from('dynamic_product')
+      .update({
+        dynamic_product_imeis: updatedDeviceList.join(','),
+        device_size: updatedSizeList.join(','),
+        purchase_qty: newQty,
+      })
+      .eq('id', showDetail.id);
+    if (error) throw error;
+
+    const { data: inv } = await supabase
+      .from('dynamic_inventory')
+      .select('available_qty, quantity_sold')
+      .eq('dynamic_product_id', showDetail.id)
+      .eq('store_id', storeId)
+      .maybeSingle();
+    if (inv) {
+      await supabase
         .from('dynamic_inventory')
-        .select('available_qty, quantity_sold')
+        .update({
+          available_qty: newQty,
+          last_updated: new Date().toISOString(),
+        })
         .eq('dynamic_product_id', showDetail.id)
-        .eq('store_id', storeId)
-        .maybeSingle();
-      if (inv) {
-        await supabase
-          .from('dynamic_inventory')
-          .update({
-            available_qty: Math.max(0, (inv.available_qty || 0) - 1),
-            last_updated: new Date().toISOString(),
-          })
-          .eq('dynamic_product_id', showDetail.id)
-          .eq('store_id', storeId);
-      }
-      setShowDetail({
-        ...showDetail,
-        deviceList: updatedDeviceList,
-        sizeList: updatedSizeList,
-      });
-      setRefreshDeviceList((prev) => !prev);
-      toast.success('Device ID removed');
-    } catch (error) {
-      console.error('Error removing device ID:', error);
-      toast.error('Failed to remove device ID');
+        .eq('store_id', storeId);
     }
-  };
+
+    setShowDetail({
+      ...showDetail,
+      deviceList: updatedDeviceList,
+      sizeList: updatedSizeList,
+      purchase_qty: newQty,
+      available_qty: newQty,
+    });
+    setRefreshDeviceList((prev) => !prev);
+    toast.success('Device ID removed');
+  } catch (error) {
+    console.error('Error removing device ID:', error);
+    toast.error('Failed to remove device ID');
+  }
+};
+
 
   // Pagination
   const paginated = useMemo(
@@ -542,21 +588,33 @@ const formatCurrency = (value) =>
 
   // Add handlers
   const handleAddChange = (idx, field, val) => {
-    const f = [...addForm];
-    f[idx][field] = val;
-    setAddForm(f);
-  };
+  const f = [...addForm];
+  f[idx][field] = val;
+  if (field === 'qty') {
+    f[idx].isQtyManuallySet = val !== '';
+  }
+  setAddForm(f);
+};
 
-  const handleAddId = (pIdx, iIdx, val) => {
-    const f = [...addForm];
-    const trimmedVal = val.trim();
-    if (trimmedVal && f[pIdx].deviceIds.some((id, i) => i !== iIdx && id.trim().toLowerCase() === trimmedVal.toLowerCase())) {
-      toast.error(`Barcode "${trimmedVal}" already exists in this product`);
-      return;
-    }
-    f[pIdx].deviceIds[iIdx] = val;
-    setAddForm(f);
-  };
+const handleAddId = (pIdx, iIdx, val) => {
+  const f = [...addForm];
+  const trimmedVal = val.trim();
+  if (trimmedVal && f[pIdx].deviceIds.some((id, i) => i !== iIdx && id.trim().toLowerCase() === trimmedVal.toLowerCase())) {
+    toast.error(`Barcode "${trimmedVal}" already exists in this product`);
+    return;
+  }
+  f[pIdx].deviceIds[iIdx] = val;
+  if (!f[pIdx].isQtyManuallySet) {
+    const deviceCount = f[pIdx].deviceIds.filter((id) => id.trim()).length;
+    f[pIdx].qty = deviceCount.toString();
+  }
+  setAddForm(f);
+};
+
+
+
+
+
 
   const handleAddSize = (pIdx, iIdx, val) => {
     const f = [...addForm];
@@ -564,19 +622,28 @@ const formatCurrency = (value) =>
     setAddForm(f);
   };
 
-  const addIdField = (pIdx) => {
-    const f = [...addForm];
-    f[pIdx].deviceIds.push('');
-    f[pIdx].deviceSizes.push('');
-    setAddForm(f);
-  };
+ const addIdField = (pIdx) => {
+  const f = [...addForm];
+  f[pIdx].deviceIds.push('');
+  f[pIdx].deviceSizes.push('');
+  if (!f[pIdx].isQtyManuallySet) {
+    const deviceCount = f[pIdx].deviceIds.filter((id) => id.trim()).length;
+    f[pIdx].qty = deviceCount.toString();
+  }
+  setAddForm(f);
+};
 
-  const removeIdField = (pIdx, iIdx) => {
-    const f = [...addForm];
-    f[pIdx].deviceIds.splice(iIdx, 1);
-    f[pIdx].deviceSizes.splice(iIdx, 1);
-    setAddForm(f);
-  };
+const removeIdField = (pIdx, iIdx) => {
+  const f = [...addForm];
+  f[pIdx].deviceIds.splice(iIdx, 1);
+  f[pIdx].deviceSizes.splice(iIdx, 1);
+  if (!f[pIdx].isQtyManuallySet) {
+    const deviceCount = f[pIdx].deviceIds.filter((id) => id.trim()).length;
+    f[pIdx].qty = deviceCount.toString();
+  }
+  setAddForm(f);
+};
+
 
   const addAnotherProduct = () => {
     setAddForm((prev) => [
@@ -599,25 +666,26 @@ const formatCurrency = (value) =>
   };
 
   // Create products
-  const createProducts = async (e) => {
-    e.preventDefault();
-    if (!addForm.length) {
-      toast.error('Add at least one product');
+ const createProducts = async (e) => {
+  e.preventDefault();
+  if (!addForm.length) {
+    toast.error('Add at least one product');
+    return;
+  }
+  for (const p of addForm) {
+    if (!p.name.trim()) {
+      toast.error('Product name is required');
       return;
     }
-    for (const p of addForm) {
-      if (!p.name.trim() || p.deviceIds.filter((d) => d.trim()).length === 0) {
-        toast.error('Product name and at least one Device ID required');
-        return;
-      }
-    }
+  }
 
-    try {
-      const allNewIds = addForm
-        .flatMap((p) => p.deviceIds.filter((id) => id.trim()).map((id) => id.trim()));
+  try {
+    const allNewIds = addForm
+      .flatMap((p) => p.deviceIds.filter((id) => id.trim()).map((id) => id.trim()));
+    if (allNewIds.length > 0) {
       const uniqueNewIds = new Set([...allNewIds.map((id) => id.toLowerCase())]);
       if (uniqueNewIds.size < allNewIds.length) {
-        toast.error('Duplicate Devices IDs detected within the new products');
+        toast.error('Duplicate Device IDs detected within the new products');
         return;
       }
 
@@ -632,105 +700,128 @@ const formatCurrency = (value) =>
           p.dynamic_product_imeis ? p.dynamic_product_imeis.split(',').map((id) => id.trim()) : []
         )
         .filter((id) => id);
-      const duplicates = allNewIds.filter((id) => existingIds
-            .some((eId) => eId.toLowerCase() === id.toLowerCase()));
+      const duplicates = allNewIds.filter((id) =>
+        existingIds.some((eId) => eId.toLowerCase() === id.toLowerCase())
+      );
       if (duplicates.length > 0) {
         toast.error(`Duplicate Device IDs already exist in other products: ${duplicates.join(', ')}`);
         return;
       }
+    }
 
-      const productsToInsert = [...addForm].map((p) => ({
+    const productsToInsert = [...addForm].map((p) => {
+      const cleanedDeviceIds = p.deviceIds.filter((d) => d.trim());
+      const qty = parseInt(p.qty) || cleanedDeviceIds.length;
+      return {
         store_id: storeId,
         name: p.name,
         description: p.description || '',
         purchase_price: parseFloat(p.purchase_price) || 0,
-        purchase_qty: parseInt(p.purchase_qty) || p.deviceIds.filter((d) => d.trim()).length,
+        purchase_qty: qty,
         selling_price: parseFloat(p.selling_price) || 0,
         suppliers_name: p.suppliers_name || '',
-        dynamic_product_imeis: p.deviceIds.filter((d) => d.trim()).join(','),
-        device_size: p.deviceSizes
-          .filter((_, i) => p.deviceIds[i].trim())
-          .map((s) => s?.trim() || '')
-          .join(','),
-      }));
-      const { data: newProds, error } = await supabase
-        .from('dynamic_product')
-        .insert(productsToInsert)
-        .select('id, dynamic_product_imeis, device_size');
-      if (error) throw error;
-
-      const invUpdates = newProds.map((p) => ({
-        dynamic_product_id: p.id,
-        store_id: storeId,
-        available_qty: p.dynamic_product_imeis.split(',').filter((id) => id.trim()).length,
-        quantity_sold: 0,
-        last_updated: new Date().toISOString(),
-      }));
-      await supabase
-        .from('dynamic_inventory')
-        .upsert(invUpdates, { onConflict: ['dynamic_product_id', 'store_id'] });
-
-      toast.success('Products added');
-      stopScanner();
-      setShowAdd(false);
-      setAddForm([
-        {
-          name: '',
-          description: '',
-          purchase_price: '',
-          purchase_qty: '',
-          selling_price: '',
-          suppliers_name: '',
-          deviceIds: [''],
-          deviceSizes: [''],
-        },
-      ]);
-      fetchProducts();
-    } catch (error) {
-      console.error('Create products error:', error);
-      toast.error('Failed to add products');
-    }
-  }
-
-  // Edit functionality
-  const openEdit = (p) => {
-    const deviceIds = p.deviceList && p.deviceList.length > 0 ? [...p.deviceList, ''] : [''];
-    const sizeList = p.sizeList || [];
-    const deviceSizes = deviceIds.map((_, i) => (i < sizeList.length ? sizeList[i] : ''));
-    setEditing({
-      ...p,
-      deviceIds,
-      deviceSizes,
+        dynamic_product_imeis: cleanedDeviceIds.join(','),
+        device_size: cleanedDeviceIds.length > 0
+          ? p.deviceSizes
+              .filter((_, i) => p.deviceIds[i].trim())
+              .map((s) => s?.trim() || '')
+              .join(',')
+          : '',
+      };
     });
-    setEditForm({
-      name: p.name || '',
-      description: p.description || '',
-      purchase_price: p.purchase_price || '',
-      selling_price: p.selling_price || '',
-      suppliers_name: p.suppliers_name || '',
-      deviceIds,
-      deviceSizes,
-    });
-  };
+    const { data: newProds, error } = await supabase
+      .from('dynamic_product')
+      .insert(productsToInsert)
+      .select('id, dynamic_product_imeis, purchase_qty');
+    if (error) throw error;
 
-  const handleEditChange = (field, value) => {
-    setEditForm((prev) => ({ ...prev, [field]: value }));
-  };
-
-  const handleDeviceIdChange = (idx, val) => {
-    const trimmedVal = val.trim();
-    if (trimmedVal && editForm.deviceIds.some((id, i) => i !== idx && id.trim().toLowerCase() === trimmedVal.toLowerCase())) {
-      toast.error(`Barcode "${trimmedVal}" already exists in this product`);
-      return;
-    }
-    const arrIds = [...editForm.deviceIds];
-    arrIds[idx] = val;
-    setEditForm((prev) => ({
-      ...prev,
-      deviceIds: arrIds,
-      deviceSizes: prev.deviceSizes || arrIds.map(() => ''),
+    const invUpdates = newProds.map((p, idx) => ({
+      dynamic_product_id: p.id,
+      store_id: storeId,
+      available_qty: parseInt(addForm[idx].qty) || p.dynamic_product_imeis.split(',').filter((id) => id.trim()).length,
+      quantity_sold: 0,
+      last_updated: new Date().toISOString(),
     }));
+    await supabase
+      .from('dynamic_inventory')
+      .upsert(invUpdates, { onConflict: ['dynamic_product_id', 'store_id'] });
+
+    toast.success('Products added');
+    stopScanner();
+    setShowAdd(false);
+    setAddForm([
+      {
+        name: '',
+        description: '',
+        purchase_price: '',
+        qty: '',
+        selling_price: '',
+        suppliers_name: '',
+        deviceIds: [''],
+        deviceSizes: [''],
+        isQtyManuallySet: false,
+      },
+    ]);
+    fetchProducts();
+  } catch (error) {
+    console.error('Create products error:', error);
+    toast.error('Failed to add products');
+  }
+};
+const openEdit = (p) => {
+  const deviceIds = p.deviceList && p.deviceList.length > 0 ? [...p.deviceList, ''] : [''];
+  const sizeList = p.sizeList || [];
+  const deviceSizes = deviceIds.map((_, i) => (i < sizeList.length ? sizeList[i] : ''));
+  setEditing({
+    ...p,
+    deviceIds,
+    deviceSizes,
+  });
+  setEditForm({
+    name: p.name || '',
+    description: p.description || '',
+    purchase_price: p.purchase_price || '',
+    qty: p.purchase_qty?.toString() || '',
+    selling_price: p.selling_price || '',
+    suppliers_name: p.suppliers_name || '',
+    deviceIds,
+    deviceSizes,
+    isQtyManuallySet: !!p.purchase_qty,
+  });
+};
+
+
+ const handleEditChange = (field, value) => {
+  setEditForm((prev) => ({
+    ...prev,
+    [field]: value,
+    ...(field === 'qty' && { isQtyManuallySet: value !== '' }),
+  }));
+};
+
+
+
+const handleDeviceIdChange = (idx, val) => {
+  const trimmedVal = val.trim();
+  if (trimmedVal && editForm.deviceIds.some((id, i) => i !== idx && id.trim().toLowerCase() === trimmedVal.toLowerCase())) {
+    toast.error(`Barcode "${trimmedVal}" already exists in this product`);
+    return;
+  }
+  const arrIds = [...editForm.deviceIds];
+  arrIds[idx] = val;
+  const updatedForm = {
+    ...editForm,
+    deviceIds: arrIds,
+    deviceSizes: editForm.deviceSizes.length === arrIds.length ? editForm.deviceSizes : arrIds.map((_, i) => editForm.deviceSizes[i] || ''),
   };
+  if (!editForm.isQtyManuallySet) {
+    const deviceCount = arrIds.filter((id) => id.trim()).length;
+    updatedForm.qty = deviceCount.toString();
+  }
+  setEditForm(updatedForm);
+};
+
+
 
   const handleDeviceSizeChange = (idx, val) => {
     const arrSizes = [...editForm.deviceSizes || []];
@@ -741,49 +832,56 @@ const formatCurrency = (value) =>
     }));
   };
 
-  const addDeviceId = () => {
-    setEditForm((prev) => ({
-      ...prev,
-      deviceIds: [...prev.deviceIds, ''],
-      deviceSizes: [...(prev.deviceSizes || []), ''],
-    }));
+const addDeviceId = () => {
+  const updatedForm = {
+    ...editForm,
+    deviceIds: [...editForm.deviceIds, ''],
+    deviceSizes: [...(editForm.deviceSizes || []), ''],
   };
+  if (!editForm.isQtyManuallySet) {
+    const deviceCount = updatedForm.deviceIds.filter((id) => id.trim()).length;
+    updatedForm.qty = deviceCount.toString();
+  }
+  setEditForm(updatedForm);
+};
 
-  const removeEditDeviceId = (idx) => {
-    setEditForm((prev) => ({
-      ...prev,
-      deviceIds: prev.deviceIds.filter((_, i) => i !== idx),
-      deviceSizes: (prev.deviceSizes || []).filter((_, i) => i !== idx),
-    }));
+const removeEditDeviceId = (idx) => {
+  const updatedForm = {
+    ...editForm,
+    deviceIds: editForm.deviceIds.filter((_, i) => i !== idx),
+    deviceSizes: (editForm.deviceSizes || []).filter((_, i) => i !== idx),
   };
+  if (!editForm.isQtyManuallySet) {
+    const deviceCount = updatedForm.deviceIds.filter((id) => id.trim()).length;
+    updatedForm.qty = deviceCount.toString();
+  }
+  setEditForm(updatedForm);
+};
 
-  const saveEdit = async () => {
-    if (!editForm.name.trim()) {
-      toast.error('Product name is required');
-      return;
-    }
+const saveEdit = async () => {
+  if (!editForm.name.trim()) {
+    toast.error('Product name is required');
+    return;
+  }
+  if (!editForm.qty && editForm.deviceIds.filter((id) => id.trim()).length === 0) {
+    toast.error('Either Quantity or at least one Device ID is required');
+    return;
+  }
 
-    const cleanedDeviceIds = editForm.deviceIds
-      .filter((id) => id && id.trim())
-      .map((id) => id.trim());
-    if (cleanedDeviceIds.length === 0) {
-      toast.error('At least one Device ID is required');
-      return;
-    }
 
-    // Ensure deviceSizes is aligned with cleanedDeviceIds
-    const cleanedDeviceSizes = Array(cleanedDeviceIds.length)
-      .fill('')
-      .map((_, i) => (editForm.deviceSizes[i] || '').trim());
 
-    console.log('Saving edit:', {
-      deviceIds: cleanedDeviceIds,
-      deviceSizes: cleanedDeviceSizes,
-      idsLength: cleanedDeviceIds.length,
-      sizesLength: cleanedDeviceSizes.length,
-    });
+const cleanedDeviceIds = editForm.deviceIds
+    .filter((id) => id && id.trim())
+    .map((id) => id.trim());
+  const newQty = parseInt(editForm.qty) || cleanedDeviceIds.length;
+  const cleanedDeviceSizes = cleanedDeviceIds.length > 0
+    ? Array(cleanedDeviceIds.length)
+        .fill('')
+        .map((_, i) => (editForm.deviceSizes[i] || '').trim())
+    : [];
 
-    try {
+  try {
+    if (cleanedDeviceIds.length > 0) {
       const uniqueIds = new Set(cleanedDeviceIds.map((id) => id.toLowerCase()));
       if (uniqueIds.size < cleanedDeviceIds.length) {
         toast.error('Duplicate Device IDs detected within this product');
@@ -802,58 +900,77 @@ const formatCurrency = (value) =>
           p.dynamic_product_imeis ? p.dynamic_product_imeis.split(',').map((id) => id.trim()) : []
         )
         .filter((id) => id);
-      const duplicates = cleanedDeviceIds.filter((id) => existingIds.some((eId) => eId.toLowerCase() === id.toLowerCase()));
+      const duplicates = cleanedDeviceIds.filter((id) =>
+        existingIds.some((eId) => eId.toLowerCase() === id.toLowerCase())
+      );
       if (duplicates.length > 0) {
         toast.error(`Device IDs already exist in other products: ${duplicates.join(', ')}`);
         return;
       }
-
-      const { error: prodErr } = await supabase
-        .from('dynamic_product')
-        .update({
-          name: editForm.name,
-          description: editForm.description || '',
-          purchase_price: parseFloat(editForm.purchase_price) || 0,
-          purchase_qty: cleanedDeviceIds.length,
-          selling_price: parseFloat(editForm.selling_price) || 0,
-          suppliers_name: editForm.suppliers_name || '',
-          dynamic_product_imeis: cleanedDeviceIds.join(','),
-          device_size: cleanedDeviceSizes.join(','),
-        })
-        .eq('id', editing.id);
-      if (prodErr) throw prodErr;
-
-      const { data: inv } = await supabase
-        .from('dynamic_inventory')
-        .select('available_qty, quantity_sold')
-        .eq('dynamic_product_id', editing.id)
-        .eq('store_id', storeId)
-        .maybeSingle();
-
-      const newAvail = cleanedDeviceIds.length;
-
-      await supabase
-        .from('dynamic_inventory')
-        .upsert(
-          {
-            dynamic_product_id: editing.id,
-            store_id: storeId,
-            available_qty: newAvail,
-            quantity_sold: inv?.quantity_sold || 0,
-            last_updated: new Date().toISOString(),
-          },
-          { onConflict: ['dynamic_product_id', 'store_id'] }
-        );
-
-      toast.success('Product updated successfully');
-      stopScanner();
-      setEditing(null);
-      fetchProducts();
-    } catch (error) {
-      console.error('Save edit error:', error);
-      toast.error('Failed to update product');
     }
-  };
+
+    // Fetch current product and inventory data
+    const { data: currentProduct, error: prodError } = await supabase
+      .from('dynamic_product')
+      .select('purchase_qty')
+      .eq('id', editing.id)
+      .single();
+    if (prodError) throw prodError;
+
+    const { data: inv, error: invError } = await supabase
+      .from('dynamic_inventory')
+      .select('available_qty, quantity_sold')
+      .eq('dynamic_product_id', editing.id)
+      .eq('store_id', storeId)
+      .maybeSingle();
+    if (invError) throw invError;
+
+    // Calculate restock amount
+    const prevQty = currentProduct.purchase_qty || cleanedDeviceIds.length;
+    const restockAmount = newQty - prevQty;
+
+    // Update product
+    const { error: updateProdErr } = await supabase
+      .from('dynamic_product')
+      .update({
+        name: editForm.name,
+        description: editForm.description || '',
+        purchase_price: parseFloat(editForm.purchase_price) || 0,
+        purchase_qty: newQty,
+        selling_price: parseFloat(editForm.selling_price) || 0,
+        suppliers_name: editForm.suppliers_name || '',
+        dynamic_product_imeis: cleanedDeviceIds.join(','),
+        device_size: cleanedDeviceSizes.join(','),
+      })
+      .eq('id', editing.id);
+    if (updateProdErr) throw updateProdErr;
+
+    // Update inventory by adding restock amount
+    const currentAvailQty = inv?.available_qty || 0;
+    const newAvailQty = Math.max(0, currentAvailQty + restockAmount);
+
+    await supabase
+      .from('dynamic_inventory')
+      .upsert(
+        {
+          dynamic_product_id: editing.id,
+          store_id: storeId,
+          available_qty: newAvailQty,
+          quantity_sold: inv?.quantity_sold || 0,
+          last_updated: new Date().toISOString(),
+        },
+        { onConflict: ['dynamic_product_id', 'store_id'] }
+      );
+
+    toast.success('Product updated successfully');
+    stopScanner();
+    setEditing(null);
+    fetchProducts();
+  } catch (error) {
+    console.error('Save edit error:', error);
+    toast.error('Failed to update product');
+  }
+};
 
   // Delete
   const deleteProduct = async (p) => {
@@ -875,22 +992,21 @@ const formatCurrency = (value) =>
 
   // Cancel add/edit
   const cancelAdd = () => {
-    stopScanner();
-    setShowAdd(false);
-    setAddForm([
-      {
-        name: '',
-        description: '',
-        purchase_price: '',
-        purchase_qty: '',
-        selling_price: '',
-        suppliers_name: '',
-        deviceIds: [''],
-        deviceSizes: [''],
-      },
-    ]);
-  };
-
+  stopScanner();
+  setShowAdd(false);
+  setAddForm([
+    {
+      name: '',
+      description: '',
+      purchase_price: '',
+      qty: '',
+      selling_price: '',
+      suppliers_name: '',
+      deviceIds: [''],
+      deviceSizes: [''],
+    },
+  ]);
+};
   const cancelEdit = () => {
     stopScanner();
     setEditing(null);
@@ -950,6 +1066,18 @@ const formatCurrency = (value) =>
               className="p-2 border rounded w-full dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
               required
             />
+
+
+             <input
+            type="number"
+            placeholder="Quantity"
+            value={p.qty}
+            onChange={(e) => handleAddChange(pi, 'qty', e.target.value)}
+            className="p-2 border rounded w-full dark:bg-gray-700 dark:border-gray-600 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:outline-none"
+          />
+        </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
+          
             <input
               type="text"
               placeholder="Supplier Name"
@@ -1072,7 +1200,7 @@ const formatCurrency = (value) =>
         </div>
       )}
 
-     <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded shadow">
+   <div className="overflow-x-auto bg-white dark:bg-gray-800 rounded shadow">
   <table className="min-w-full text-sm text-left text-gray-700 dark:text-gray-300">
     <thead className="bg-gray-100 dark:bg-gray-700 text-xs uppercase text-gray-600 dark:text-gray-400">
       <tr>
@@ -1096,7 +1224,7 @@ const formatCurrency = (value) =>
           <td className="px-4 py-3 whitespace-nowrap">{p.name}</td>
           <td className="px-4 py-3 whitespace-nowrap">{p.description}</td>
           <td className="px-4 py-3 whitespace-nowrap">₦{formatCurrency(p.purchase_price || 0)}</td>
-          <td className="px-4 py-3 whitespace-nowrap">{p.deviceList.length}</td>
+          <td className="px-4 py-3 whitespace-nowrap">{p.available_qty}</td>
           <td className="px-4 py-3 whitespace-nowrap">₦{formatCurrency(p.selling_price || 0)}</td>
           <td className="px-4 py-3 whitespace-nowrap">{p.suppliers_name}</td>
           <td className="px-4 py-3 whitespace-nowrap">
@@ -1133,6 +1261,8 @@ const formatCurrency = (value) =>
     </tbody>
   </table>
 </div>
+
+
 
       <div className="flex justify-center gap-2 mt-4">
         <button
@@ -1241,7 +1371,7 @@ const formatCurrency = (value) =>
       {editing && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 z-50 mt-16">
           <div className="bg-white dark:bg-gray-900 p-3 rounded max-w-xl w-full max-h-[80vh] overflow-y-auto">
-            <h2 className="text-xl font-bold mb-4 text-gray-800 dark:text-white mt-6">Edit Product</h2>
+            <h2 className="text-xl font-bold mb-4 text-gray-800 dark:text-white mt-6">Edit Productss</h2>
 
             <div className="space-y-4">
               <div className="space-y-3">
@@ -1258,9 +1388,21 @@ const formatCurrency = (value) =>
                     value={editForm.name}
                     onChange={(e) => handleEditChange('name', e.target.value)}
                     className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white"
-                    required
+                   
                   />
                 </div>
+                
+<div>
+          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+            Quantity
+          </label>
+          <input
+            type="number"
+            value={editForm.qty}
+            onChange={(e) => handleEditChange('qty', e.target.value)}
+            className="w-full p-2 border rounded dark:bg-gray-700 dark:border-gray-600 dark:text-white"
+          />
+        </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
