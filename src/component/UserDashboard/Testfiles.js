@@ -1,2082 +1,633 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { supabase } from '../../supabaseClient';
 import {
-  FaPlus,
+  FaEdit,
   FaTrashAlt,
   FaFileCsv,
   FaFilePdf,
-  FaEdit,
-  FaCamera,
+  FaPlus,
+ 
 } from 'react-icons/fa';
-import { supabase } from '../../supabaseClient';
 import { ToastContainer, toast } from 'react-toastify';
 import 'react-toastify/dist/ReactToastify.css';
-
 import { motion } from 'framer-motion';
-import { Html5Qrcode, Html5QrcodeSupportedFormats, Html5QrcodeScannerState } from 'html5-qrcode';
 
 const tooltipVariants = {
   hidden: { opacity: 0, y: 10 },
   visible: { opacity: 1, y: 0, transition: { duration: 0.3 } },
 };
 
-export default function SalesTracker() {
+export default function DynamicProducts() {
   const storeId = localStorage.getItem('store_id');
-  const itemsPerPage = 20;
-  const detailPageSize = 20;
 
-const playSuccessSound = () => {
-  const audio = new Audio('https://freesound.org/data/previews/321/321552_5265637-lq.mp3');
-  audio.play().catch((err) => console.error('Audio playback failed:', err));
-};
-
-
-
-  // State Declarations
+  // State
   const [products, setProducts] = useState([]);
-  const [inventory, setInventory] = useState([]);
-  const [sales, setSales] = useState([]);
   const [filtered, setFiltered] = useState([]);
   const [search, setSearch] = useState('');
-  const [currentPage, setCurrentPage] = useState(1);
-  const [viewMode, setViewMode] = useState('list');
   const [showAdd, setShowAdd] = useState(false);
-  const [lines, setLines] = useState([
-    { dynamic_product_id: '', quantity: 1, unit_price: '', deviceIds: [''], deviceSizes: [''], isQuantityManual: false },
-  ]);
-  const [paymentMethod, setPaymentMethod] = useState('Cash');
+  const [addForm, setAddForm] = useState([{
+    name: '',
+    description: '',
+    purchase_price: '',
+    purchase_qty: '',
+    selling_price: '',
+    suppliers_name: '',
+    device_id: '',
+  }]);
+  const [currentPage, setCurrentPage] = useState(1);
   const [editing, setEditing] = useState(null);
-  const [saleForm, setSaleForm] = useState({
-    quantity: 1,
-    unit_price: '',
-    deviceIds: [''],
-    deviceSizes: [''],
-    payment_method: 'Cash',
-    isQuantityManual: false,
-  });
+  const [form, setForm] = useState({});
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [onboardingStep, setOnboardingStep] = useState(0);
-  const [totalOnboardingSteps] = useState(0);
-  const [availableDeviceIds, setAvailableDeviceIds] = useState({}); // Object mapping lineIdx to { deviceIds: [], deviceSizes: [] }
 
-  
-  const [showDetailModal, setShowDetailModal] = useState(false);
-  const [selectedDeviceInfo, setSelectedDeviceInfo] = useState([]);
-  const [detailPage, setDetailPage] = useState(1);
-  const [showScanner, setShowScanner] = useState(false);
-  const [scannerTarget, setScannerTarget] = useState(null);
-  const [scannerError, setScannerError] = useState(null);
-  const [scannerLoading, setScannerLoading] = useState(false);
-  const [manualInput, setManualInput] = useState('');
-  const [externalScannerMode, setExternalScannerMode] = useState(false);
- 
-
-  // Refs
-  const isProcessingClick = useRef(false);
-  const videoRef = useRef(null);
-  const scannerDivRef = useRef(null);
-  const html5QrCodeRef = useRef(null);
-
-  // Computed Values
-  const paginatedSales = useMemo(() => {
-    if (viewMode !== 'list') return [];
+  const itemsPerPage = 20;
+  const paginatedProducts = useMemo(() => {
     const start = (currentPage - 1) * itemsPerPage;
     return filtered.slice(start, start + itemsPerPage);
-  }, [filtered, currentPage, viewMode]);
-
-  const dailyTotals = useMemo(() => {
-    const groups = {};
-    sales.forEach((s) => {
-      const date = new Date(s.sold_at).toISOString().split('T')[0];
-      if (!groups[date]) groups[date] = { period: date, total: 0, count: 0 };
-      groups[date].total += s.amount;
-      groups[date].count += 1;
-    });
-    return Object.values(groups).sort((a, b) => b.period.localeCompare(a.period));
-  }, [sales]);
-
-  const weeklyTotals = useMemo(() => {
-    const groups = {};
-    sales.forEach((s) => {
-      const date = new Date(s.sold_at);
-      const day = date.getDay();
-      const diff = day === 0 ? 6 : day - 1;
-      const monday = new Date(date);
-      monday.setDate(date.getDate() - diff);
-      const key = monday.toISOString().split('T')[0];
-      if (!groups[key]) groups[key] = { period: `Week of ${key}`, total: 0, count: 0 };
-      groups[key].total += s.amount;
-      groups[key].count += 1;
-    });
-    return Object.values(groups).sort((a, b) => b.period.localeCompare(a.period));
-  }, [sales]);
-
-  const totalsData = useMemo(() => {
-    if (viewMode === 'daily') return dailyTotals;
-    if (viewMode === 'weekly') return weeklyTotals;
-    return [];
-  }, [viewMode, dailyTotals, weeklyTotals]);
-
-  const paginatedTotals = useMemo(() => {
-    if (viewMode === 'list') return [];
-    const start = (currentPage - 1) * itemsPerPage;
-    return totalsData.slice(start, start + itemsPerPage);
-  }, [viewMode, totalsData, currentPage]);
-
-  const totalPages = useMemo(() => {
-    if (viewMode === 'list') return Math.ceil(filtered.length / itemsPerPage);
-    return Math.ceil(totalsData.length / itemsPerPage);
-  }, [viewMode, filtered, totalsData]);
-
-  const totalAmount = useMemo(() => lines.reduce((sum, l) => sum + l.quantity * l.unit_price, 0), [lines]);
-
-  const paginatedDevices = useMemo(() => {
-    const start = (detailPage - 1) * detailPageSize;
-    const end = start + detailPageSize;
-    return selectedDeviceInfo.slice(start, end);
-  }, [selectedDeviceInfo, detailPage]);
-
-  const totalDetailPages = Math.ceil(selectedDeviceInfo.length / detailPageSize);
-  
-
-
-
-
-  
-// Utility Function (add above the component)
-const formatCurrency = (value) =>
-  value.toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-
-const checkSoldDevices = useCallback(async (deviceIds, productId, lineIdx) => {
-  if (!deviceIds || deviceIds.length === 0) {
-    setAvailableDeviceIds(prev => ({ ...prev, [lineIdx]: { deviceIds: [], deviceSizes: [] } }));
-    return;
-  }
-  try {
-    const normalizedIds = deviceIds.map(id => id.trim());
-    const { data, error } = await supabase
-      .from('dynamic_sales')
-      .select('device_id')
-      .in('device_id', normalizedIds);
-    if (error) throw error;
-    const soldIds = data.map(item => item.device_id.trim());
-    const product = products.find(p => p.id === productId);
-    if (!product) return;
-    const available = product.deviceIds
-      .map((id, idx) => ({ id, size: product.deviceSizes[idx] || '' }))
-      .filter(item => !soldIds.includes(item.id));
-    setAvailableDeviceIds(prev => ({
-      ...prev,
-      [lineIdx]: {
-        deviceIds: available.map(item => item.id),
-        deviceSizes: available.map(item => item.size),
-      },
-    }));
-  } catch (error) {
-    console.error('Error fetching sold devices:', error);
-    toast.error('Failed to check sold devices');
-    setAvailableDeviceIds(prev => ({ ...prev, [lineIdx]: { deviceIds: [], deviceSizes: [] } }));
-  }
-}, [products]);
+  }, [filtered, currentPage]);
+  const totalPages = Math.ceil(filtered.length / itemsPerPage);
 
   // Onboarding steps
   const onboardingSteps = [
-    { target: '.new-sale-button', content: 'Click to record a new sale.' },
-    { target: '.search-input', content: 'Search by product, payment method, or product ID.' },
-    { target: '.view-mode-selector', content: 'Switch to Daily or Weekly Totals for summaries.' },
+    {
+      target: '.add-product-button',
+      content: 'Click to add a new product to your catalog.',
+    },
+    {
+      target: '.search-input',
+      content: 'Search by product name to filter the catalog.',
+    },
+    {
+      target: products.length > 0 ? '.edit-button-0' : '.add-product-button',
+      content: products.length > 0 ? 'Click to edit product details.' : 'Start by adding your first product!',
+    },
   ];
 
-  // Scanner: External Scanner Input
+  // Check if onboarding has been completed
   useEffect(() => {
-    if (!externalScannerMode || !scannerTarget) return;
-
-    let buffer = '';
-    let lastKeyTime = 0;
-
-    const handleKeypress = (e) => {
-      const currentTime = Date.now();
-      const timeDiff = currentTime - lastKeyTime;
-
-      if (timeDiff > 50 && buffer) {
-        buffer = '';
-      }
-
-      if (e.key === 'Enter' && buffer) {
-        const scannedDeviceId = buffer.trim();
-        if (!scannedDeviceId) {
-          toast.error('Scanned Product ID cannot be empty');
-          setScannerError('Scanned Product ID cannot be empty');
-          return;
-        }
-
-        const { modal, lineIdx, deviceIdx } = scannerTarget;
-        if (modal === 'add') {
-          const ls = [...lines];
-          if (ls[lineIdx].deviceIds.includes(scannedDeviceId)) {
-            toast.error(`Product ID "${scannedDeviceId}" already exists in this line`);
-            setScannerError(`Product ID "${scannedDeviceId}" already exists`);
-            return;
-          }
-          ls[lineIdx].deviceIds[deviceIdx] = scannedDeviceId;
-          if (!ls[lineIdx].isQuantityManual) {
-            ls[lineIdx].quantity = ls[lineIdx].deviceIds.filter(id => id.trim()).length || 1;
-          }
-          setLines(ls);
-        } else if (modal === 'edit') {
-          if (saleForm.deviceIds.some((id, i) => i !== deviceIdx && id.trim() === scannedDeviceId)) {
-            toast.error(`Product ID "${scannedDeviceId}" already exists in this sale`);
-            setScannerError(`Product ID "${scannedDeviceId}" already exists`);
-            return;
-          }
-          const newDeviceIds = [...saleForm.deviceIds];
-          newDeviceIds[deviceIdx] = scannedDeviceId;
-          setSaleForm((prev) => ({
-            ...prev,
-            deviceIds: newDeviceIds,
-            quantity: prev.isQuantityManual ? prev.quantity : (newDeviceIds.filter(id => id.trim()).length || 1),
-          }));
-        }
-
-        setScannerTarget(null);
-        setShowScanner(false);
-        setScannerError(null);
-        setScannerLoading(false);
-        toast.success(`Scanned Product ID: ${scannedDeviceId}`);
-        buffer = '';
-      } else if (e.key !== 'Enter') {
-        buffer += e.key;
-      }
-
-      lastKeyTime = currentTime;
-    };
-
-    document.addEventListener('keypress', handleKeypress);
-
-    return () => {
-      document.removeEventListener('keypress', handleKeypress);
-    };
-  }, [externalScannerMode, scannerTarget, lines, saleForm]);
-
-  // Scanner: Webcam Scanner
-
-  
-  useEffect(() => {
-    if (!showScanner || !scannerDivRef.current || !videoRef.current || externalScannerMode) return;
-
-    setScannerLoading(true);
-    const currentVideo = videoRef.current;
-
-    try {
-      if (!document.getElementById('scanner')) {
-        setScannerError('Scanner container not found');
-        setScannerLoading(false);
-        toast.error('Scanner container not found. Please use manual input.');
-        return;
-      }
-
-      html5QrCodeRef.current = new Html5Qrcode('scanner');
-    } catch (err) {
-      setScannerError(`Failed to initialize scanner: ${err.message}`);
-      setScannerLoading(false);
-      toast.error('Failed to initialize scanner. Please use manual input.');
-      return;
+    if (!localStorage.getItem('productCatalogOnboardingCompleted')) {
+      const timer = setTimeout(() => {
+        setShowOnboarding(true);
+      }, 3000); // 3-second delay
+      return () => clearTimeout(timer);
     }
-
-
-
-
-    const config = {
-      fps: 15,
-      qrbox: { width: 250, height: 100 },
-      formatsToSupport: [
-        Html5QrcodeSupportedFormats.CODE_128,
-        Html5QrcodeSupportedFormats.CODE_39,
-        Html5QrcodeSupportedFormats.EAN_13,
-        Html5QrcodeSupportedFormats.UPC_A,
-        Html5QrcodeSupportedFormats.QR_CODE,
-      ],
-      aspectRatio: 4 / 3,
-      disableFlip: true,
-      videoConstraints: { width: 640, height: 480, facingMode: 'environment' },
-    };
-
-
-const onScanSuccess = async (scannedDeviceId) => {
-  playSuccessSound();
-  if (!scannedDeviceId) {
-    toast.error('Scanned Product ID cannot be empty');
-    setScannerError('Scanned Product ID cannot be empty');
-    return false;
-  }
-
-  console.log('Scanned Device ID:', scannedDeviceId);
-
-  const { data: productData, error } = await supabase
-    .from('dynamic_product')
-    .select('id, name, selling_price, dynamic_product_imeis, device_size')
-    .eq('store_id', storeId)
-    .ilike('dynamic_product_imeis', `%${scannedDeviceId}%`)
-    .single();
-
-  if (error || !productData) {
-    console.error('Supabase Query Error:', error);
-    toast.error(`Product ID "${scannedDeviceId}" not found`);
-    setScannerError(`Product ID "${scannedDeviceId}" not found`);
-    return false;
-  }
-
-  console.log('Found Product:', productData);
-
-  const deviceIds = productData.dynamic_product_imeis ? productData.dynamic_product_imeis.split(',').map(id => id.trim()).filter(id => id) : [];
-  const deviceSizes = productData.device_size ? productData.device_size.split(',').map(size => size.trim()).filter(size => size) : [];
-  const idIndex = deviceIds.indexOf(scannedDeviceId);
-
-  if (scannerTarget) {
-    const { modal, lineIdx, deviceIdx } = scannerTarget;
-    let newDeviceIdx;
-
-    if (modal === 'add') {
-      const ls = [...lines];
-      // Check if the product name already exists in any line
-      const existingLineIdx = ls.findIndex(line => {
-        const product = products.find(p => p.id === line.dynamic_product_id);
-        return product && product.name === productData.name;
-      });
-
-      if (existingLineIdx !== -1) {
-        // Product exists, append to that line
-        if (ls[existingLineIdx].deviceIds.some(id => id.trim().toLowerCase() === scannedDeviceId.toLowerCase())) {
-          toast.error(`Product ID "${scannedDeviceId}" already exists in this product`);
-          setScannerError(`Product ID "${scannedDeviceId}" `);
-          return false;
-        }
-        ls[existingLineIdx].deviceIds.push(scannedDeviceId);
-        ls[existingLineIdx].deviceSizes.push(idIndex !== -1 ? deviceSizes[idIndex] || '' : '');
-        if (!ls[existingLineIdx].isQuantityManual) {
-          ls[existingLineIdx].quantity = ls[existingLineIdx].deviceIds.filter(id => id.trim()).length || 1;
-        }
-        // Merge any other lines with the same product name
-        const mergedLines = ls.filter((line, idx) => {
-          if (idx === existingLineIdx) return true;
-          const product = products.find(p => p.id === line.dynamic_product_id);
-          if (product && product.name === productData.name) {
-            ls[existingLineIdx].deviceIds.push(...line.deviceIds.filter(id => id.trim()));
-            ls[existingLineIdx].deviceSizes.push(...line.deviceSizes);
-            if (!ls[existingLineIdx].isQuantityManual) {
-              ls[existingLineIdx].quantity = ls[existingLineIdx].deviceIds.filter(id => id.trim()).length || 1;
-            }
-            return false;
-          }
-          return true;
-        });
-        console.log('Updated Lines (Existing Product):', mergedLines);
-        setLines(mergedLines);
-        newDeviceIdx = ls[existingLineIdx].deviceIds.length - 1;
-        checkSoldDevices(deviceIds, productData.id, existingLineIdx);
-        setScannerTarget({ modal, lineIdx: existingLineIdx, deviceIdx: newDeviceIdx });
-      } else {
-        // No existing line with this product name
-        if (!ls[lineIdx].dynamic_product_id || ls[lineIdx].deviceIds.every(id => !id.trim())) {
-          // Update current line if empty
-          if (ls[lineIdx].deviceIds.some(id => id.trim().toLowerCase() === scannedDeviceId.toLowerCase())) {
-            toast.error(`Product ID "${scannedDeviceId}" already exists in this line`);
-            setScannerError(`Product ID "${scannedDeviceId}" already exists`);
-            return false;
-          }
-          ls[lineIdx] = {
-            ...ls[lineIdx],
-            dynamic_product_id: Number(productData.id),
-            unit_price: Number(productData.selling_price),
-            deviceIds: [scannedDeviceId],
-            deviceSizes: [idIndex !== -1 ? deviceSizes[idIndex] || '' : ''],
-            quantity: ls[lineIdx].isQuantityManual ? ls[lineIdx].quantity : 1,
-          };
-          console.log('Updated Lines (Current Line):', ls);
-          setLines(ls);
-          newDeviceIdx = 0;
-          checkSoldDevices(deviceIds, productData.id, lineIdx);
-          setScannerTarget({ modal, lineIdx, deviceIdx: newDeviceIdx });
-        } else {
-          // Create new line for different product
-          const newLine = {
-            dynamic_product_id: Number(productData.id),
-            quantity: 1,
-            unit_price: Number(productData.selling_price),
-            deviceIds: [scannedDeviceId],
-            deviceSizes: [idIndex !== -1 ? deviceSizes[idIndex] || '' : ''],
-            isQuantityManual: false,
-          };
-          ls.push(newLine);
-          console.log('Added New Line:', ls);
-          setLines(ls);
-          newDeviceIdx = 0;
-          checkSoldDevices(deviceIds, productData.id, ls.length - 1);
-          setScannerTarget({ modal, lineIdx: ls.length - 1, deviceIdx: newDeviceIdx });
-        }
-      }
-    } else if (modal === 'edit') {
-      if (saleForm.deviceIds.some((id, i) => i !== deviceIdx && id.trim().toLowerCase() === scannedDeviceId.toLowerCase())) {
-        toast.error(`Product ID "${scannedDeviceId}" already exists in this sale`);
-        setScannerError(`Product ID "${scannedDeviceId}" already exists`);
-        return false;
-      }
-      const updatedForm = {
-        ...saleForm,
-        dynamic_product_id: Number(productData.id),
-        unit_price: Number(productData.selling_price),
-        deviceIds: [...saleForm.deviceIds.slice(0, deviceIdx), scannedDeviceId, ...saleForm.deviceIds.slice(deviceIdx + 1)],
-        deviceSizes: [...saleForm.deviceSizes.slice(0, deviceIdx), (idIndex !== -1 ? deviceSizes[idIndex] || '' : ''), ...saleForm.deviceSizes.slice(deviceIdx + 1)],
-        quantity: saleForm.isQuantityManual ? saleForm.quantity : (saleForm.deviceIds.filter(id => id.trim()).length || 1),
-      };
-      console.log('Updated Sale Form:', updatedForm);
-      setSaleForm(updatedForm);
-      newDeviceIdx = updatedForm.deviceIds.length - 1;
-      checkSoldDevices(deviceIds, productData.id, 0);
-      setScannerTarget({ modal, lineIdx, deviceIdx: newDeviceIdx });
-    }
-
-    setScannerError(null);
-    toast.success(`Scanned Product ID: ${scannedDeviceId}`);
-    return true;
-  }
-  console.error('No scanner target set');
-  toast.error('No scanner target set');
-  return false;
-};
-
-
-
-
-
-
-    const onScanFailure = (error) => {
-      if (error.includes('No MultiFormat Readers were able to detect the code') ||
-          error.includes('No QR code found') ||
-          error.includes('IndexSizeError')) {
-        console.debug('No barcode detected');
-      } else {
-        setScannerError(`Scan error: ${error}`);
-      }
-    };
-
-    const startScanner = async (attempt = 1, maxAttempts = 5) => {
-      if (!currentVideo || !scannerDivRef.current) {
-        setScannerError('Scanner elements not found');
-        setScannerLoading(false);
-        toast.error('Scanner elements not found. Please use manual input.');
-        return;
-      }
-
-      if (attempt > maxAttempts) {
-        setScannerError('Failed to initialize scanner after multiple attempts');
-        setScannerLoading(false);
-        toast.error('Failed to initialize scanner. Please use manual input.');
-        return;
-      }
-
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: config.videoConstraints,
-        });
-        currentVideo.srcObject = stream;
-        await new Promise((resolve) => {
-          currentVideo.onloadedmetadata = () => resolve();
-        });
-
-        await html5QrCodeRef.current.start(
-          { facingMode: 'environment' },
-          config,
-          onScanSuccess,
-          onScanFailure
-        );
-
-        setScannerLoading(false);
-      } catch (err) {
-        setScannerError(`Failed to initialize scanner: ${err.message}`);
-        setScannerLoading(false);
-        if (err.name === 'NotAllowedError') {
-          toast.error('Camera access denied. Please allow camera permissions.');
-        } else if (err.name === 'NotFoundError') {
-          toast.error('No camera found. Please use manual input.');
-        } else {
-          setTimeout(() => startScanner(attempt + 1, maxAttempts), 200);
-        }
-      }
-    };
-
-    Html5Qrcode.getCameras()
-      .then((cameras) => {
-        if (cameras.length === 0) {
-          setScannerError('No cameras detected. Please use manual input.');
-          setScannerLoading(false);
-          toast.error('No cameras detected. Please use manual input.');
-          return;
-        }
-        startScanner();
-      })
-      .catch((err) => {
-        setScannerError(`Failed to access cameras: ${err.message}`);
-        setScannerLoading(false);
-        toast.error('Failed to access cameras. Please use manual input.');
-      });
-return () => {
-    if (html5QrCodeRef.current &&
-        [Html5QrcodeScannerState.SCANNING, Html5QrcodeScannerState.PAUSED].includes(
-          html5QrCodeRef.current.getState()
-        )) {
-      html5QrCodeRef.current
-        .stop()
-        .then(() => console.log('Webcam scanner stopped'))
-        .catch((err) => console.error('Error stopping scanner:', err));
-    }
-    if (currentVideo && currentVideo.srcObject) {
-      currentVideo.srcObject.getTracks().forEach((track) => track.stop());
-      currentVideo.srcObject = null;
-    }
-    html5QrCodeRef.current = null;
-  };
- }, [showScanner, scannerTarget, lines, saleForm, externalScannerMode, checkSoldDevices, storeId, products]);
-
-
-
-  const stopScanner = useCallback(() => {
-    if (html5QrCodeRef.current &&
-        [Html5QrcodeScannerState.SCANNING, Html5QrcodeScannerState.PAUSED].includes(
-          html5QrCodeRef.current.getState()
-        )) {
-      html5QrCodeRef.current
-        .stop()
-        .then(() => console.log('Scanner stopped'))
-        .catch((err) => console.error('Error stopping scanner:', err));
-    }
-    if (videoRef.current && videoRef.current.srcObject) {
-      videoRef.current.srcObject.getTracks().forEach((track) => track.stop());
-      videoRef.current.srcObject = null;
-    }
-    html5QrCodeRef.current = null;
   }, []);
 
-  const openScanner = (modal, lineIdx, deviceIdx) => {
-    setScannerTarget({ modal, lineIdx, deviceIdx });
-    setShowScanner(true);
-    setScannerError(null);
-    setScannerLoading(true);
-    setManualInput('');
-    setExternalScannerMode(false);
-  };
-
-
-
-const handleManualInput = async () => {
-  const trimmedInput = manualInput.trim();
-  if (!trimmedInput) {
-    toast.error('Product ID cannot be empty');
-    setScannerError('Product ID cannot be empty');
-    return;
-  }
-
-  console.log('Manual Input Device ID:', trimmedInput);
-
-  // Check if Device ID exists in dynamic_product
-  const { data: productData, error } = await supabase
-    .from('dynamic_product')
-    .select('id, name, selling_price, dynamic_product_imeis, device_size')
-    .eq('store_id', storeId)
-    .ilike('dynamic_product_imeis', `%${trimmedInput}%`)
-    .single();
-  
-  if (error || !productData) {
-    console.error('Supabase Query Error:', error);
-    toast.error(`Product ID "${trimmedInput}" not found`);
-    setScannerError(`Product ID "${trimmedInput}" not found`);
-    return;
-  }
-
-  console.log('Found Product:', productData);
-
-  const deviceIds = productData.dynamic_product_imeis ? productData.dynamic_product_imeis.split(',').map(id => id.trim()).filter(id => id) : [];
-  const deviceSizes = productData.device_size ? productData.device_size.split(',').map(size => size.trim()).filter(size => size) : [];
-  const idIndex = deviceIds.indexOf(trimmedInput);
-
-  if (scannerTarget) {
-    const { modal, lineIdx, deviceIdx } = scannerTarget;
-    let newDeviceIdx;
-
-    if (modal === 'add') {
-      const ls = [...lines];
-      // Check if the product name already exists in any line
-      const existingLineIdx = ls.findIndex(line => {
-        const product = products.find(p => p.id === line.dynamic_product_id);
-        return product && product.name === productData.name;
-      });
-
-      if (existingLineIdx !== -1) {
-        // Product exists, append to that line
-        if (ls[existingLineIdx].deviceIds.some(id => id.trim().toLowerCase() === trimmedInput.toLowerCase())) {
-          toast.error(`Product ID "${trimmedInput}" already exists in this product`);
-          setScannerError(`Product ID "${trimmedInput}" already exists`);
-          return;
-        }
-        // Filter out empty deviceIds and deviceSizes
-        ls[existingLineIdx].deviceIds = ls[existingLineIdx].deviceIds.filter(id => id.trim());
-        ls[existingLineIdx].deviceSizes = ls[existingLineIdx].deviceSizes.slice(0, ls[existingLineIdx].deviceIds.length);
-        // Append new device ID and size
-        ls[existingLineIdx].deviceIds.push(trimmedInput);
-        ls[existingLineIdx].deviceSizes.push(idIndex !== -1 ? deviceSizes[idIndex] || '' : '');
-        if (!ls[existingLineIdx].isQuantityManual) {
-          ls[existingLineIdx].quantity = ls[existingLineIdx].deviceIds.length || 1;
-        }
-        // Merge any other lines with the same product name
-        const mergedLines = ls.filter((line, idx) => {
-          if (idx === existingLineIdx) return true;
-          const product = products.find(p => p.id === line.dynamic_product_id);
-          if (product && product.name === productData.name) {
-            ls[existingLineIdx].deviceIds.push(...line.deviceIds.filter(id => id.trim()));
-            ls[existingLineIdx].deviceSizes.push(...line.deviceSizes.slice(0, line.deviceIds.filter(id => id.trim()).length));
-            if (!ls[existingLineIdx].isQuantityManual) {
-              ls[existingLineIdx].quantity = ls[existingLineIdx].deviceIds.length || 1;
-            }
-            return false;
-          }
-          return true;
-        });
-        console.log('Updated Lines (Existing Product):', mergedLines);
-        setLines(mergedLines);
-        newDeviceIdx = ls[existingLineIdx].deviceIds.length;
-        checkSoldDevices(deviceIds, productData.id, existingLineIdx);
-        setScannerTarget({ modal, lineIdx: existingLineIdx, deviceIdx: newDeviceIdx });
-      } else {
-        // No existing line with this product name
-        if (!ls[lineIdx].dynamic_product_id || ls[lineIdx].deviceIds.every(id => !id.trim())) {
-          // Update current line if empty
-          if (ls[lineIdx].deviceIds.some(id => id.trim().toLowerCase() === trimmedInput.toLowerCase())) {
-            toast.error(`Product ID "${trimmedInput}" already exists in this line`);
-            setScannerError(`Product ID "${trimmedInput}" already exists`);
-            return;
-          }
-          ls[lineIdx] = {
-            ...ls[lineIdx],
-            dynamic_product_id: Number(productData.id),
-            unit_price: Number(productData.selling_price),
-            deviceIds: [trimmedInput],
-            deviceSizes: [idIndex !== -1 ? deviceSizes[idIndex] || '' : ''],
-            quantity: ls[lineIdx].isQuantityManual ? ls[lineIdx].quantity : 1,
-          };
-          console.log('Updated Lines (Current Line):', ls);
-          setLines(ls);
-          newDeviceIdx = ls[lineIdx].deviceIds.length;
-          checkSoldDevices(deviceIds, productData.id, lineIdx);
-          setScannerTarget({ modal, lineIdx, deviceIdx: newDeviceIdx });
-        } else {
-          // Create new line for different product
-          const newLine = {
-            dynamic_product_id: Number(productData.id),
-            quantity: 1,
-            unit_price: Number(productData.selling_price),
-            deviceIds: [trimmedInput],
-            deviceSizes: [idIndex !== -1 ? deviceSizes[idIndex] || '' : ''],
-            isQuantityManual: false,
-          };
-          ls.push(newLine);
-          console.log('Added New Line:', ls);
-          setLines(ls);
-          newDeviceIdx = 0;
-          checkSoldDevices(deviceIds, productData.id, ls.length - 1);
-          setScannerTarget({ modal, lineIdx: ls.length - 1, deviceIdx: newDeviceIdx });
-        }
-      }
-    } else if (modal === 'edit') {
-      if (saleForm.deviceIds.some((id, i) => i !== deviceIdx && id.trim().toLowerCase() === trimmedInput.toLowerCase())) {
-        toast.error(`Product ID "${trimmedInput}" already exists in this sale`);
-        setScannerError(`Product ID "${trimmedInput}" already exists`);
-        return;
-      }
-      const updatedForm = {
-        ...saleForm,
-        dynamic_product_id: Number(productData.id),
-        unit_price: Number(productData.selling_price),
-        deviceIds: [...saleForm.deviceIds.filter(id => id.trim()), trimmedInput],
-        deviceSizes: [...saleForm.deviceSizes.slice(0, saleForm.deviceIds.filter(id => id.trim()).length), idIndex !== -1 ? deviceSizes[idIndex] || '' : ''],
-        quantity: saleForm.isQuantityManual ? saleForm.quantity : (saleForm.deviceIds.filter(id => id.trim()).length + 1 || 1),
-      };
-      console.log('Updated Sale Form:', updatedForm);
-      setSaleForm(updatedForm);
-      newDeviceIdx = updatedForm.deviceIds.length;
-      checkSoldDevices(deviceIds, productData.id, 0);
-      setScannerTarget({ modal, lineIdx, deviceIdx: newDeviceIdx });
+  // Fetch products
+  const fetchProducts = useCallback(async () => {
+    if (!storeId) {
+      toast.error('No store ID found. Please log in.');
+      return;
     }
-
-    setScannerError(null);
-    setScannerLoading(false);
-    setManualInput('');
-    toast.success(`Added Product ID: ${trimmedInput}`);
-  } else {
-    console.error('No scanner target set');
-    toast.error('No scanner target set');
-  }
-};
-
-
-
-  // Data Fetching
- const fetchProducts = useCallback(async () => {
-  if (!storeId) return;
-  const { data, error } = await supabase
-    .from('dynamic_product')
-    .select('id, name, selling_price, dynamic_product_imeis, device_size')
-    .eq('store_id', storeId)
-    .order('name');
-  if (error) {
-    toast.error(`Failed to fetch products: ${error.message}`);
-    setProducts([]);
-  } else {
-    const processedProducts = (data || []).map(p => ({
-      ...p,
-      deviceIds: p.dynamic_product_imeis ? p.dynamic_product_imeis.split(',').filter(id => id.trim()) : [],
-      deviceSizes: p.device_size ? p.device_size.split(',').filter(size => size.trim()) : [],
-    }));
-    console.log('Fetched Products:', processedProducts);
-    setProducts(processedProducts);
-  }
-}, [storeId]);
-
-
-  const fetchInventory = useCallback(async () => {
-    if (!storeId) return;
     const { data, error } = await supabase
-      .from('dynamic_inventory')
-      .select('dynamic_product_id, available_qty')
-      .eq('store_id', storeId);
-    if (error) {
-      toast.error(`Failed to fetch inventory: ${error.message}`);
-      setInventory([]);
-    } else {
-      setInventory(data || []);
-    }
-  }, [storeId]);
-
-  const fetchSales = useCallback(async () => {
-    if (!storeId) return;
-    const { data, error } = await supabase
-      .from('dynamic_sales')
-      .select(`
-        id,
-        sale_group_id,
-        dynamic_product_id,
-        quantity,
-        unit_price,
-        amount,
-        payment_method,
-        paid_to,
-        device_id,
-        device_size,
-        sold_at,
-        dynamic_product(name)
-      `)
+      .from('dynamic_product')
+      .select('id, name, description, purchase_price, purchase_qty, selling_price, suppliers_name, device_id, created_at')
       .eq('store_id', storeId)
-      .order('sold_at', { ascending: false });
+      .order('id', { ascending: true });
     if (error) {
-      toast.error(`Failed to fetch sales: ${error.message}`);
-      setSales([]);
-      setFiltered([]);
+      console.error('Error fetching products:', error.message);
+      toast.error('Failed to fetch products');
     } else {
-      const processedSales = (data || []).map(sale => ({
-        ...sale,
-        deviceIds: sale.device_id ? sale.device_id.split(',').filter(id => id.trim()) : [],
-        deviceSizes: sale.device_size ? sale.device_size.split(',').filter(size => size.trim()) : [],
-      }));
-      setSales(processedSales);
-      setFiltered(processedSales);
+      setProducts(data);
+      setFiltered(data);
     }
   }, [storeId]);
 
   useEffect(() => {
     fetchProducts();
-    fetchInventory();
-    fetchSales();
-  }, [fetchProducts, fetchInventory, fetchSales]);
+  }, [fetchProducts]);
 
-  // Search Filter
+  // Search filter
   useEffect(() => {
-    if (!search) return setFiltered(sales);
-    const q = search.toLowerCase();
-    setFiltered(
-      sales.filter(
-        (s) =>
-          s.dynamic_product.name.toLowerCase().includes(q) ||
-          s.payment_method.toLowerCase().includes(q) ||
-          s.deviceIds.some(id => id.toLowerCase().includes(q)) ||
-          s.deviceSizes.some(size => size.toLowerCase().includes(q))
-      )
+    if (!search) setFiltered(products);
+    else {
+      const q = search.toLowerCase();
+      setFiltered(products.filter(p => p.name.toLowerCase().includes(q)));
+    }
+    setCurrentPage(1);
+  }, [search, products]);
+
+  // Add product handlers
+  const handleAddChange = (e, index) => {
+    const { name, value } = e.target;
+    setAddForm(prev => {
+      const newForm = [...prev];
+      newForm[index][name] = value;
+      return newForm;
+    });
+  };
+
+  const removeProduct = (index) => {
+    setAddForm(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const addAnotherProduct = () => {
+    setAddForm(prev => [...prev, {
+      name: '',
+      description: '',
+      purchase_price: '',
+      purchase_qty: '',
+      selling_price: '',
+      suppliers_name: '',
+      device_id: '',
+    }]);
+  };
+
+  const createProducts = async (e) => {
+    e.preventDefault();
+    if (addForm.length === 0) {
+      toast.error('Please add at least one product');
+      return;
+    }
+    const isValid = addForm.every(product =>
+      product.name &&  product.purchase_qty
     );
-    setCurrentPage(1);
-  }, [search, sales]);
-
-  // Reset Pagination on View Mode Change
-  useEffect(() => {
-    setCurrentPage(1);
-  }, [viewMode]);
-
-  // Form Handlers
- const handleLineChange = async (lineIdx, field, value, deviceIdx = null) => {
-  if (field === 'deviceIds' && deviceIdx !== null && value.trim()) {
-    // Handle manual Device ID input
-    const trimmedInput = value.trim();
-    console.log('Manual Device ID Input:', trimmedInput, 'Line:', lineIdx, 'DeviceIdx:', deviceIdx);
-
-    // Query dynamic_product for matching Device ID
-    const { data: productData, error } = await supabase
-      .from('dynamic_product')
-      .select('id, name, selling_price, dynamic_product_imeis, device_size')
-      .eq('store_id', storeId)
-      .ilike('dynamic_product_imeis', `%${trimmedInput}%`)
-      .limit(1)
-      .single();
-
-    setLines((ls) => {
-      const next = [...ls];
-      if (error || !productData) {
-        console.error('Supabase Query Error for Device ID:', error, 'Input:', trimmedInput);
-        toast.error(`Product ID "${trimmedInput}" not found`);
-        next[lineIdx].deviceIds[deviceIdx] = trimmedInput; // Update Device ID anyway
-        next[lineIdx].deviceSizes[deviceIdx] = ''; // Clear size
-        return next;
-      }
-
-      console.log('Found Product for Device ID:', productData);
-
-      const deviceIds = productData.dynamic_product_imeis ? productData.dynamic_product_imeis.split(',').map(id => id.trim()).filter(id => id) : [];
-      const deviceSizes = productData.device_size ? productData.device_size.split(',').map(size => size.trim()).filter(size => size) : [];
-      const idIndex = deviceIds.indexOf(trimmedInput);
-
-      // Check if the product name already exists in any line
-      const existingLineIdx = next.findIndex(line => {
-        const product = products.find(p => p.id === line.dynamic_product_id);
-        return product && product.name === productData.name;
-      });
-
-      if (existingLineIdx !== -1) {
-        // Product exists, append to that line
-        if (next[existingLineIdx].deviceIds.some(id => id.trim().toLowerCase() === trimmedInput.toLowerCase())) {
-          toast.error(`Product ID "${trimmedInput}" already exists in this product`);
-          return next;
-        }
-        // Filter out empty deviceIds and deviceSizes
-        next[existingLineIdx].deviceIds = next[existingLineIdx].deviceIds.filter(id => id.trim());
-        next[existingLineIdx].deviceSizes = next[existingLineIdx].deviceSizes.slice(0, next[existingLineIdx].deviceIds.length);
-        // Update or append device ID
-        if (deviceIdx < next[existingLineIdx].deviceIds.length) {
-          next[existingLineIdx].deviceIds[deviceIdx] = trimmedInput;
-          next[existingLineIdx].deviceSizes[deviceIdx] = idIndex !== -1 ? deviceSizes[idIndex] || '' : '';
-        } else {
-          next[existingLineIdx].deviceIds.push(trimmedInput);
-          next[existingLineIdx].deviceSizes.push(idIndex !== -1 ? deviceSizes[idIndex] || '' : '');
-        }
-        if (!next[existingLineIdx].isQuantityManual) {
-          next[existingLineIdx].quantity = next[existingLineIdx].deviceIds.length || 1;
-        }
-        // Merge any other lines with the same product name
-        const mergedLines = next.filter((line, idx) => {
-          if (idx === existingLineIdx) return true;
-          const product = products.find(p => p.id === line.dynamic_product_id);
-          if (product && product.name === productData.name) {
-            next[existingLineIdx].deviceIds.push(...line.deviceIds.filter(id => id.trim()));
-            next[existingLineIdx].deviceSizes.push(...line.deviceSizes.slice(0, line.deviceIds.filter(id => id.trim()).length));
-            if (!next[existingLineIdx].isQuantityManual) {
-              next[existingLineIdx].quantity = next[existingLineIdx].deviceIds.length || 1;
-            }
-            return false;
-          }
-          return true;
-        });
-        console.log('Updated Lines (Existing Product):', mergedLines);
-        checkSoldDevices(deviceIds, productData.id, existingLineIdx);
-        return mergedLines;
-      } else {
-        // No existing line with this product name
-        if (!next[lineIdx].dynamic_product_id || next[lineIdx].deviceIds.every(id => !id.trim())) {
-          // Update current line if empty
-          if (next[lineIdx].deviceIds.some(id => id.trim().toLowerCase() === trimmedInput.toLowerCase())) {
-            toast.error(`Product ID "${trimmedInput}" already exists in this line`);
-            return next;
-          }
-          next[lineIdx] = {
-            ...next[lineIdx],
-            dynamic_product_id: Number(productData.id),
-            unit_price: Number(productData.selling_price),
-            deviceIds: [trimmedInput],
-            deviceSizes: [idIndex !== -1 ? deviceSizes[idIndex] || '' : ''],
-            quantity: next[lineIdx].isQuantityManual ? next[lineIdx].quantity : 1,
-          };
-          console.log('Updated Lines (Current Line):', next);
-          checkSoldDevices(deviceIds, productData.id, lineIdx);
-          return next;
-        } else {
-          // Create new line for different product
-          const newLine = {
-            dynamic_product_id: Number(productData.id),
-            quantity: 1,
-            unit_price: Number(productData.selling_price),
-            deviceIds: [trimmedInput],
-            deviceSizes: [idIndex !== -1 ? deviceSizes[idIndex] || '' : ''],
-            isQuantityManual: false,
-          };
-          next.push(newLine);
-          console.log('Added New Line:', next);
-          checkSoldDevices(deviceIds, productData.id, next.length - 1);
-          return next;
-        }
-      }
-    });
-  } else {
-    // Handle other fields
-    setLines((ls) => {
-      const next = [...ls];
-      if (field === 'deviceIds' && deviceIdx !== null) {
-        next[lineIdx].deviceIds[deviceIdx] = value;
-        // Autofill size only if product is selected and deviceId matches
-        const product = products.find(p => p.id === next[lineIdx].dynamic_product_id);
-        if (product && value) {
-          const idIndex = product.deviceIds.indexOf(value);
-          next[lineIdx].deviceSizes[deviceIdx] = idIndex !== -1 ? product.deviceSizes[idIndex] || '' : '';
-        } else {
-          next[lineIdx].deviceSizes[deviceIdx] = '';
-        }
-        if (!next[lineIdx].isQuantityManual) {
-          const nonEmptyCount = next[lineIdx].deviceIds.filter(id => id.trim()).length;
-          next[lineIdx].quantity = nonEmptyCount || 1;
-        }
-      } else if (field === 'deviceSizes' && deviceIdx !== null) {
-        next[lineIdx].deviceSizes[deviceIdx] = value;
-      } else if (field === 'quantity') {
-        next[lineIdx].quantity = +value;
-        next[lineIdx].isQuantityManual = true;
-      } else if (field === 'unit_price') {
-        next[lineIdx].unit_price = +value;
-      } else if (field === 'dynamic_product_id') {
-        next[lineIdx].dynamic_product_id = +value;
-        const prod = products.find((p) => p.id === +value);
-        if (prod) {
-          next[lineIdx].unit_price = prod.selling_price;
-          checkSoldDevices(prod.deviceIds, prod.id, lineIdx);
-          next[lineIdx].deviceIds = [];
-          next[lineIdx].deviceSizes = [];
-          next[lineIdx].quantity = next[lineIdx].isQuantityManual ? next[lineIdx].quantity : 1;
-        }
-        const inv = inventory.find((i) => i.dynamic_product_id === +value);
-        if (inv && inv.available_qty < 6) {
-          const prodName = prod?.name || 'this product';
-          toast.warning(`Low stock: only ${inv.available_qty} left for ${prodName}`);
-        }
-      }
-      console.log('Updated Lines (Other Fields):', next);
-      return next;
-    });
-  }
-};
-
-  const addDeviceId = (e, lineIdx) => {
-    e.preventDefault();
-    if (isProcessingClick.current) return;
-    isProcessingClick.current = true;
-    setTimeout(() => { isProcessingClick.current = false; }, 100);
-    setLines((ls) => {
-      const next = ls.map((line, idx) => {
-        if (idx === lineIdx) {
-          return {
-            ...line,
-            deviceIds: [...line.deviceIds, ''],
-            deviceSizes: [...line.deviceSizes, ''],
-            quantity: line.isQuantityManual ? line.quantity : (line.deviceIds.filter(id => id.trim()).length + 1 || 1),
-            isQuantityManual: false,
-          };
-        }
-        return line;
-      });
-      return next;
-    });
-  };
-
-  const removeDeviceId = (lineIdx, deviceIdx) => {
-    setLines((ls) => {
-      const next = [...ls];
-      next[lineIdx].deviceIds = next[lineIdx].deviceIds.filter((_, i) => i !== deviceIdx);
-      next[lineIdx].deviceSizes = next[lineIdx].deviceSizes.filter((_, i) => i !== deviceIdx);
-      if (next[lineIdx].deviceIds.length === 0) {
-        next[lineIdx].deviceIds = [''];
-        next[lineIdx].deviceSizes = [''];
-      }
-      if (!next[lineIdx].isQuantityManual) {
-        const nonEmptyCount = next[lineIdx].deviceIds.filter(id => id.trim()).length;
-        next[lineIdx].quantity = nonEmptyCount || 1;
-      }
-      next[lineIdx].isQuantityManual = false;
-      return next;
-    });
-  };
-
-  const addLine = () => setLines((ls) => [
-    ...ls,
-    { dynamic_product_id: '', quantity: 1, unit_price: '', deviceIds: [''], deviceSizes: [''], isQuantityManual: false },
-  ]);
-
-  const removeLine = (idx) => setLines((ls) => ls.filter((_, i) => i !== idx));
-
- const handleEditChange = (field, value, deviceIdx = null) => {
-  setSaleForm((f) => {
-    const next = { ...f };
-    if (field === 'deviceIds' && deviceIdx !== null) {
-      next.deviceIds[deviceIdx] = value;
-      const product = products.find(p => p.id === next.dynamic_product_id);
-      if (product && value) {
-        const idIndex = product.deviceIds.indexOf(value);
-        if (idIndex !== -1) {
-          next.deviceSizes[deviceIdx] = product.deviceSizes[idIndex] || '';
-        } else {
-          next.deviceSizes[deviceIdx] = '';
-        }
-      }
-      if (!next.isQuantityManual) {
-        const nonEmptyCount = next.deviceIds.filter(id => id.trim()).length;
-        next.quantity = nonEmptyCount || 1;
-      }
-      next.isQuantityManual = false;
-    } else if (field === 'deviceSizes' && deviceIdx !== null) {
-      next.deviceSizes[deviceIdx] = value;
-    } else if (field === 'quantity') {
-      next.quantity = +value;
-      next.isQuantityManual = true;
-    } else if (field === 'dynamic_product_id') {
-      next.dynamic_product_id = +value;
-      const prod = products.find((p) => p.id === +value);
-      if (prod) {
-        next.unit_price = prod.selling_price;
-        checkSoldDevices(prod.deviceIds, prod.id, 0);
-        next.deviceIds = [''];
-        next.deviceSizes = [''];
-        next.quantity = next.isQuantityManual ? next.quantity : 1;
-      }
-    } else {
-      next[field] = ['unit_price'].includes(field) ? +value : value;
+    if (!isValid) {
+      toast.error('Please fill all required fields for each product');
+      return;
     }
-    return next;
-  });
-};
-
-  const addEditDeviceId = (e) => {
-    e.preventDefault();
-    if (isProcessingClick.current) return;
-    isProcessingClick.current = true;
-    setTimeout(() => { isProcessingClick.current = false; }, 100);
-    setSaleForm((f) => {
-      const newDeviceIds = [...f.deviceIds, ''];
-      const newDeviceSizes = [...f.deviceSizes, ''];
-      const nonEmptyCount = newDeviceIds.filter(id => id.trim()).length;
-      return {
-        ...f,
-        deviceIds: newDeviceIds,
-        deviceSizes: newDeviceSizes,
-        quantity: f.isQuantityManual ? f.quantity : (nonEmptyCount || 1),
-        isQuantityManual: false,
-      };
-    });
-  };
-
-  const removeEditDeviceId = (deviceIdx) => {
-    setSaleForm((f) => {
-      const newDeviceIds = f.deviceIds.filter((_, i) => i !== deviceIdx);
-      const newDeviceSizes = f.deviceSizes.filter((_, i) => i !== deviceIdx);
-      const nonEmptyCount = newDeviceIds.filter(id => id.trim()).length;
-      return {
-        ...f,
-        deviceIds: newDeviceIds.length === 0 ? [''] : newDeviceIds,
-        deviceSizes: newDeviceSizes.length === 0 ? [''] : newDeviceSizes,
-        quantity: f.isQuantityManual ? f.quantity : (nonEmptyCount || 1),
-        isQuantityManual: false,
-      };
-    });
-  };
-
-  const openDetailModal = (sale) => {
-    const deviceInfo = sale.deviceIds.map((id, i) => ({
-      id: id || '',
-      size: sale.deviceSizes[i] || '',
+    const productsToInsert = addForm.map(product => ({
+      store_id: storeId,
+      name: product.name,
+      description: product.description,
+      purchase_price: parseFloat(product.purchase_price),
+      purchase_qty: parseInt(product.purchase_qty),
+      selling_price: parseFloat(product.selling_price),
+      suppliers_name: product.suppliers_name,
+      device_id: product.device_id
     }));
-    setSelectedDeviceInfo(deviceInfo);
-    setDetailPage(1);
-    setShowDetailModal(true);
+    const { data: insertedProducts, error: insertError } = await supabase
+      .from('dynamic_product')
+      .insert(productsToInsert)
+      .select();
+    if (insertError) {
+      toast.error(`Failed to add products: ${insertError.message}`);
+      return;
+    }
+
+    // Update dynamic_inventory for each inserted product
+    const inventoryUpdates = insertedProducts.map(product => ({
+      dynamic_product_id: product.id,
+      store_id: storeId,
+      available_qty: parseInt(product.purchase_qty),
+      quantity_sold: 0,
+      last_updated: new Date().toISOString()
+    }));
+    const { error: inventoryError } = await supabase
+      .from('dynamic_inventory')
+      .upsert(inventoryUpdates, { onConflict: ['dynamic_product_id', 'store_id'] });
+    if (inventoryError) {
+      toast.error(`Failed to update inventory: ${inventoryError.message}`);
+      return;
+    }
+
+    toast.success('Products added successfully');
+    setShowAdd(false);
+    setAddForm([{
+      name: '',
+      description: '',
+      purchase_price: '',
+      purchase_qty: '',
+      selling_price: '',
+      suppliers_name: '',
+      device_id: '',
+    }]);
+    fetchProducts();
   };
 
-  // CRUD Operations
-  const createSale = async (e) => {
-    e.preventDefault();
-    try {
-      if (!paymentMethod) {
-        toast.error('Please select a payment method.');
-        return;
-      }
-      for (const line of lines) {
-        if (!line.dynamic_product_id || line.quantity <= 0 || line.unit_price <= 0) {
-          toast.error('Please fill in all required fields for each sale line.');
-          return;
-        }
-        const inv = inventory.find((i) => i.dynamic_product_id === line.dynamic_product_id);
-        if (!inv || inv.available_qty < line.quantity) {
-          const prod = products.find((p) => p.id === line.dynamic_product_id);
-          toast.error(`Insufficient stock for ${prod.name}: only ${inv?.available_qty || 0} available`);
-          return;
-        }
-        const deviceIds = line.deviceIds.filter(id => id.trim());
-        if (deviceIds.length > 0) {
-          const uniqueIds = new Set(deviceIds);
-          if (uniqueIds.size < deviceIds.length) {
-            toast.error('Duplicate Product IDs detected in this sale line');
-            return;
-          }
-        }
-      }
-
-      const { data: grp, error: grpErr } = await supabase
-        .from('sale_groups')
-        .insert([{ store_id: storeId, total_amount: totalAmount, payment_method: paymentMethod }])
-        .select('id')
-        .single();
-      if (grpErr) throw new Error(`Sale group creation failed: ${grpErr.message}`);
-      const groupId = grp.id;
-
-      const inserts = lines.map((l) => ({
-        store_id: storeId,
-        sale_group_id: groupId,
-        dynamic_product_id: l.dynamic_product_id,
-        quantity: l.quantity,
-        unit_price: l.unit_price,
-        amount: l.quantity * l.unit_price,
-        device_id: l.deviceIds.filter(id => id.trim()).join(',') || null,
-        device_size: l.deviceSizes.map(size => size.trim() || '').join(',') || null,
-        payment_method: paymentMethod,
-      }));
-      const { error: insErr } = await supabase.from('dynamic_sales').insert(inserts);
-      if (insErr) throw new Error(`Sales insertion failed: ${insErr.message}`);
-
-      for (const line of lines) {
-        const inv = inventory.find((i) => i.dynamic_product_id === line.dynamic_product_id);
-        if (inv) {
-          const newQty = inv.available_qty - line.quantity;
-          const { error } = await supabase
-            .from('dynamic_inventory')
-            .update({ available_qty: newQty })
-            .eq('dynamic_product_id', line.dynamic_product_id)
-            .eq('store_id', storeId);
-          if (error) toast.error(`Inventory update failed for product ${line.dynamic_product_id}`);
-          setInventory((prev) =>
-            prev.map((i) =>
-              i.dynamic_product_id === line.dynamic_product_id ? { ...i, available_qty: newQty } : i
-            )
-          );
-        }
-      }
-
-      toast.success('Sale added successfully!');
-      stopScanner();
-      setShowAdd(false);
-      setLines([{ dynamic_product_id: '', quantity: 1, unit_price: '', deviceIds: [''], deviceSizes: [''], isQuantityManual: false }]);
-      setPaymentMethod('Cash');
-      fetchSales();
-    } catch (err) {
-      toast.error(err.message);
-    }
+  // Edit handlers
+  const startEdit = p => {
+    setEditing(p);
+    setForm({
+      name: p.name,
+      description: p.description || '',
+      purchase_price: p.purchase_price,
+      purchase_qty: p.purchase_qty,
+      selling_price: p.selling_price,
+      suppliers_name: p.suppliers_name || '',
+      device_id: p.device_id || '',
+    });
   };
 
-  const saveEdit = async () => {
-  try {
-    const originalSale = sales.find((s) => s.id === editing);
-    if (!originalSale) throw new Error('Sale not found');
-
-    const quantityDiff = saleForm.quantity - originalSale.quantity;
-    if (quantityDiff > 0) {
-      const inv = inventory.find((i) => i.dynamic_product_id === saleForm.dynamic_product_id || originalSale.dynamic_product_id);
-      if (!inv || inv.available_qty < quantityDiff) {
-        throw new Error(
-          `Insufficient stock to increase quantity by ${quantityDiff}. Available: ${inv?.available_qty || 0}`
-        );
-      }
-    }
-
-    const deviceIds = saleForm.deviceIds.filter(id => id.trim());
-    if (deviceIds.length > 0) {
-      const uniqueIds = new Set(deviceIds);
-      if (uniqueIds.size < deviceIds.length) {
-        toast.error('Duplicate Product IDs detected in this sale');
-        return;
-      }
-    }
-
-    const { error } = await supabase
-      .from('dynamic_sales')
-      .update({
-        dynamic_product_id: saleForm.dynamic_product_id || originalSale.dynamic_product_id,
-        quantity: saleForm.quantity,
-        unit_price: saleForm.unit_price,
-        device_id: deviceIds.join(',') || null,
-        device_size: saleForm.deviceSizes.map(size => size.trim() || '').join(',') || null,
-        payment_method: saleForm.payment_method || originalSale.payment_method,
-      })
-      .eq('id', editing);
-    if (error) throw new Error(`Update failed: ${error.message}`);
-
-    if (quantityDiff !== 0) {
-      const inv = inventory.find((i) => i.dynamic_product_id === saleForm.dynamic_product_id || originalSale.dynamic_product_id);
-      if (inv) {
-        const newQty = inv.available_qty - quantityDiff;
-        await supabase
-          .from('dynamic_inventory')
-          .update({ available_qty: newQty })
-          .eq('dynamic_product_id', saleForm.dynamic_product_id || originalSale.dynamic_product_id)
-          .eq('store_id', storeId);
-        setInventory((prev) =>
-          prev.map((i) =>
-            i.dynamic_product_id === (saleForm.dynamic_product_id || originalSale.dynamic_product_id)
-              ? { ...i, available_qty: newQty }
-              : i
-          )
-        );
-      }
-    }
-
-    toast.success('Sale updated successfully!');
-    stopScanner();
-    setEditing(null);
-    fetchSales();
-  } catch (err) {
-    toast.error(err.message);
+  const handleFormChange = e => {
+    const { name, value } = e.target;
+    setForm(f => ({ ...f, [name]: value }));
+  };
+const saveEdit = async () => {
+  if (!form.name || !form.purchase_qty) {
+    toast.error('Please fill all required fields');
+    return;
   }
+
+  const restockQty = parseInt(form.purchase_qty);
+  if (restockQty <= 0) {
+    toast.error('Restock quantity must be greater than zero');
+    return;
+  }
+
+  // Log input for debugging
+  console.log('Restock Quantity Entered:', restockQty);
+
+  // Update dynamic_product (store restock amount for transaction history)
+  const productUpdate = {
+    name: form.name,
+    description: form.description,
+    purchase_price: parseFloat(form.purchase_price),
+    purchase_qty: restockQty, // Record restock amount
+    selling_price: parseFloat(form.selling_price),
+    suppliers_name: form.suppliers_name,
+    device_id: form.device_id,
+  };
+  const { error: productError } = await supabase
+    .from('dynamic_product')
+    .update(productUpdate)
+    .eq('id', editing.id);
+  if (productError) {
+    toast.error(`Failed to update product: ${productError.message}`);
+    return;
+  }
+
+  // Fetch current inventory data
+  const { data: inventoryData, error: fetchInventoryError } = await supabase
+    .from('dynamic_inventory')
+    .select('available_qty, quantity_sold')
+    .eq('dynamic_product_id', editing.id)
+    .eq('store_id', storeId)
+    .maybeSingle();
+
+  // Log fetched inventory data
+  console.log('Fetched Inventory Data:', inventoryData);
+  console.log('Fetch Inventory Error:', fetchInventoryError);
+
+  let newAvailableQty = restockQty; // Default for new inventory entries
+  let existingQuantitySold = 0; // Default for new entries
+  if (inventoryData) {
+    // Add restock quantity to existing available_qty
+    newAvailableQty = inventoryData.available_qty + restockQty;
+    existingQuantitySold = inventoryData.quantity_sold || 0;
+  } else if (fetchInventoryError) {
+    toast.error(`Failed to fetch inventory: ${fetchInventoryError.message}`);
+    return;
+  }
+
+  // Log calculated new available_qty
+  console.log('Calculated New Available Qty:', newAvailableQty);
+
+  // Update or insert dynamic_inventory
+  const inventoryUpdate = {
+    dynamic_product_id: editing.id,
+    store_id: storeId,
+    available_qty: newAvailableQty,
+    quantity_sold: existingQuantitySold,
+    last_updated: new Date().toISOString(),
+  };
+  const { error: inventoryError } = await supabase
+    .from('dynamic_inventory')
+    .upsert([inventoryUpdate], { onConflict: ['dynamic_product_id', 'store_id'] });
+  if (inventoryError) {
+    toast.error(`Failed to update inventory: ${inventoryError.message}`);
+    return;
+  }
+
+  toast.success('Product restocked successfully');
+  setEditing(null);
+  fetchProducts();
 };
 
 
-  const deleteSale = async (s) => {
-    if (!window.confirm(`Delete sale #${s.id}?`)) return;
-    try {
-      const { error } = await supabase.from('dynamic_sales').delete().eq('id', s.id);
-      if (error) throw new Error(`Deletion failed: ${error.message}`);
 
-      const inv = inventory.find((i) => i.dynamic_product_id === s.dynamic_product_id);
-      if (inv) {
-        const newQty = inv.available_qty + s.quantity;
+  const deleteProduct = async p => {
+    if (window.confirm(`Delete product "${p.name}"?`)) {
+      const { error } = await supabase.from('dynamic_product').delete().eq('id', p.id);
+      if (error) {
+        toast.error(`Failed to delete product: ${error.message}`);
+      } else {
+        // Clean up dynamic inventory
         await supabase
           .from('dynamic_inventory')
-          .update({ available_qty: newQty })
-          .eq('dynamic_product_id', s.dynamic_product_id)
+          .delete()
+          .eq('dynamic_product_id', p.id)
           .eq('store_id', storeId);
-        setInventory((prev) =>
-          prev.map((i) =>
-            i.dynamic_product_id === s.dynamic_product_id ? { ...i, available_qty: newQty } : i
-          )
-        );
+        toast.success('Product deleted successfully');
+        fetchProducts();
       }
-
-      toast.success('Sale deleted successfully!');
-      fetchSales();
-    } catch (err) {
-      toast.error(err.message);
     }
   };
 
-  // Export Functions
+  // Export CSV
   const exportCSV = () => {
-    let csv = '';
-    if (viewMode === 'list') {
-      csv = 'Product,Product IDs,Product Sizes,Quantity,Unit Price,Amount,Payment Method,Sold At\n';
-      filtered.forEach((s) => {
-        csv += [
-          `"${s.dynamic_product.name.replace(/"/g, '""')}"`,
-          s.deviceIds.join(';') || '-',
-          s.deviceSizes.join(';') || '-',
-          s.quantity,
-          s.unit_price.toFixed(2),
-          s.amount.toFixed(2),
-          s.payment_method,
-          `"${new Date(s.sold_at).toLocaleString()}"`,
-        ].join(',') + '\n';
-      });
-    } else {
-      csv = 'Period,Total Sales,Number of Sales\n';
-      totalsData.forEach((t) => {
-        csv += [
-          `"${t.period.replace(/"/g, '""')}"`,
-          t.total.toFixed(2),
-          t.count,
-        ].join(',') + '\n';
-      });
-    }
-    const blob = new Blob([csv], { type: 'text/csv' });
-    const url = URL.createObjectURL(blob);
+    let csv = "data:text/csv;charset=utf-8,";
+    csv += "Name,Description,PurchasePrice,Qty,SellingPrice,Supplier,DeviceID,CreatedAt\n";
+    filtered.forEach(p => {
+      const row = [
+        p.name,
+        (p.description || '').replace(/,/g, ' '),
+        parseFloat(p.purchase_price).toFixed(2),
+        p.purchase_qty,
+        parseFloat(p.selling_price).toFixed(2),
+        p.suppliers_name || '',
+        p.device_id || '',
+        p.created_at
+      ].join(',');
+      csv += row + '\n';
+    });
     const link = document.createElement('a');
-    link.href = url;
-    link.download = viewMode === 'list' ? 'sales.csv' : `${viewMode}_totals.csv`;
+    link.href = encodeURI(csv);
+    link.download = 'dynamic_products.csv';
+    document.body.appendChild(link);
     link.click();
-    URL.revokeObjectURL(url);
-    toast.success('CSV exported successfully!');
+    document.body.removeChild(link);
   };
 
+  // Export PDF
   const exportPDF = () => {
     import('jspdf').then(({ jsPDF }) => {
       const doc = new jsPDF();
       let y = 10;
-      doc.text(viewMode === 'list' ? 'Sales Report' : `${viewMode.charAt(0).toUpperCase()}${viewMode.slice(1)} Sales Totals`, 10, y);
+      doc.text('Dynamic Products', 10, y);
       y += 10;
-      if (viewMode === 'list') {
-        filtered.forEach((s) => {
-          doc.text(
-            `Product: ${s.dynamic_product.name}, Devices: ${s.deviceIds.join(', ') || '-'}, Sizes: ${s.deviceSizes.join(', ') || '-'}, Qty: ${s.quantity}, Unit: ${s.unit_price.toFixed(2)}, Amt: ${s.amount.toFixed(2)}, Pay: ${s.payment_method}, At: ${new Date(s.sold_at).toLocaleString()}`,
-            10,
-            y
-          );
-          y += 10;
-          if (y > 280) {
-            doc.addPage();
-            y = 10;
-          }
-        });
-      } else {
-        totalsData.forEach((t) => {
-          doc.text(`Period: ${t.period}, Total: ${t.total.toFixed(2)}, Sales: ${t.count}`, 10, y);
-          y += 10;
-          if (y > 280) {
-            doc.addPage();
-            y = 10;
-          }
-        });
-      }
-      doc.save(viewMode === 'list' ? 'sales.pdf' : `${viewMode}_totals.pdf`);
-      toast.success('PDF exported successfully!');
+      filtered.forEach(p => {
+        const line = `Name: ${p.name}, Purchase: $${parseFloat(p.purchase_price).toFixed(2)}, Qty: ${p.purchase_qty}, Sell: $${parseFloat(p.selling_price).toFixed(2)}`;
+        doc.text(line, 10, y);
+        y += 10;
+      });
+      doc.save('dynamic_products.pdf');
     });
   };
 
-  // Onboarding Handlers
+  // Onboarding handlers
   const handleNextStep = () => {
     if (onboardingStep < onboardingSteps.length - 1) {
       setOnboardingStep(onboardingStep + 1);
     } else {
       setShowOnboarding(false);
-      localStorage.setItem('salesTrackerOnboardingCompleted', 'true');
+      localStorage.setItem('productCatalogOnboardingCompleted', 'true');
     }
   };
 
   const handleSkipOnboarding = () => {
     setShowOnboarding(false);
-    localStorage.setItem('salesTrackerOnboardingCompleted', 'true');
+    localStorage.setItem('productCatalogOnboardingCompleted', 'true');
   };
 
+  // Tooltip positioning
   const getTooltipPosition = (target) => {
     const element = document.querySelector(target);
-    if (!element) return { top: '0px', left: '0px' };
+    if (!element) return { top: 0, left: 0 };
     const rect = element.getBoundingClientRect();
     return {
-      top: `${rect.bottom + window.scrollY + 10}px`,
-      left: `${rect.left + window.scrollX}px`,
+      top: rect.bottom + window.scrollY + 10,
+      left: rect.left + window.scrollX,
     };
   };
 
-  // Render
   return (
-    <div className="p-0 max-w-7xl mx-auto dark:bg-gray-900 dark:text-white mt-48">
+    <div className="p-0 mt-24">
       <ToastContainer position="top-right" autoClose={3000} />
-   
 
-      {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-4 gap-4">
-        <div className="flex flex-col sm:flex-row sm:items-center gap-4 w-full sm:w-auto">
-          <div className="flex items-center gap-2">
-            <label className="text-sm font-medium">View:</label>
-            <select
-              value={viewMode}
-              onChange={(e) => setViewMode(e.target.value)}
-              className="p-2 border rounded dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 view-mode-selector"
-            >
-              <option value="list">Individual Sales</option>
-              <option value="daily">Daily Totals</option>
-              <option value="weekly">Weekly Totals</option>
-            </select>
-          </div>
-          {viewMode === 'list' && (
-            <input
-              type="text"
-              placeholder="Search by product, payment, Product ID, or size…"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              className="p-2 border rounded w-full sm:w-64 dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500 search-input"
-            />
-          )}
-        </div>
+      {/* Search & Add */}
+      <div className="flex flex-col sm:flex-row items-center gap-2 mb-4">
+        <input
+          type="text"
+          placeholder="Search products..."
+          value={search}
+          onChange={e => setSearch(e.target.value)}
+          className="w-full p-2 border rounded dark:bg-gray-900 dark:text-white search-input"
+        />
         <button
           onClick={() => setShowAdd(true)}
-          className="flex items-center gap-1 px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 w-full sm:w-auto new-sale-button"
+          className="w-full sm:w-auto flex items-center gap-1 px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 add-product-button"
         >
-          <FaPlus /> New Sale
+          <FaPlus /> Products
         </button>
       </div>
 
       {/* Add Modal */}
-     {showAdd && (
-  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 z-50">
-  <form
-    onSubmit={createSale}
-    className="bg-white dark:bg-gray-900 p-4 sm:p-6 rounded-lg shadow-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto mt-28"
-
-    >
-      <h2 className="text-xl sm:text-2xl font-bold mb-4">Add Sale</h2>
-
-      {lines.map((line, lineIdx) => (
-        <div key={lineIdx} className="mb-6 border-b pb-4 dark:border-gray-700">
-          <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 mb-4">
-            <div className="sm:col-span-4">
-              <label className="block mb-1 text-sm font-medium">Product</label>
-              <select
-                name="dynamic_product_id"
-                value={line.dynamic_product_id}
-                onChange={(e) => handleLineChange(lineIdx, 'dynamic_product_id', e.target.value)}
-                required
-                className="w-full p-2 border rounded dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-              >
-                <option value="">Select product…</option>
-                {products.map((p) => (
-                  <option key={p.id} value={p.id}>{p.name}</option>
-                ))}
-              </select>
-            </div>
-            <div className="sm:col-span-2">
-              <label className="block mb-1 text-sm font-medium">Quantity</label>
-              <input
-                type="number"
-                min="1"
-                name="quantity"
-                value={line.quantity}
-                onChange={(e) => handleLineChange(lineIdx, 'quantity', e.target.value)}
-                className="w-full p-2 border rounded dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                required
-              />
-            </div>
-            <div className="sm:col-span-2">
-              <label className="block mb-1 text-sm font-medium">Unit Price</label>
-              <input
-                type="number"
-                step="0.01"
-                name="unit_price"
-                value={line.unit_price}
-                onChange={(e) => handleLineChange(lineIdx, 'unit_price', e.target.value)}
-                className="w-full p-2 border rounded dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                required
-              />
-            </div>
-            <div className="sm:col-span-3 flex items-end">
+      {showAdd && (
+        <div className="fixed inset-0 z-50 flex items-start justify-center bg-black bg-opacity-50 p-4 overflow-y-auto pt-24 ">
+          <div className="w-full max-w-3xl mx-auto  ">
+            <form
+              onSubmit={createProducts}
+              className="bg-white dark:bg-gray-900 p-6 rounded-lg shadow-lg w-full dark:text-white"
+            >
+              <h2 className="text-2xl font-bold mb-6 ">Add Products</h2>
+              {addForm.map((product, index) => (
+                <div key={index} className="mb-4 p-4 border rounded ">
+                  <h3 className="text-lg font-semibold mb-2">Product {index + 1}</h3>
+                  {[
+                    { name: 'name', label: 'Name' },
+                    { name: 'description', label: 'Description' },
+                    { name: 'purchase_price', label: 'Total Purchase Price' },
+                    { name: 'purchase_qty', label: 'Quantity Purchased' },
+                    { name: 'selling_price', label: 'Selling Price' },
+                    { name: 'suppliers_name', label: 'Supplier Name' },
+                    { name: 'device_id', label: 'Product ID' },
+                  ].map(field => (
+                    <div key={field.name} className="mb-2">
+                      <label className="block mb-1">{field.label}</label>
+                      <input
+                        type={field.name.includes('price') || field.name.includes('qty') ? 'number' : 'text'}
+                        step="0.01"
+                        name={field.name}
+                        value={product[field.name]}
+                        onChange={(e) => handleAddChange(e, index)}
+                        required={['name',  'purchase_qty'].includes(field.name)}
+                        className="w-full p-2 border rounded dark:bg-gray-900 dark:text-white"
+                      />
+                    </div>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => removeProduct(index)}
+                    className="mt-2 px-3 py-1 bg-red-500 text-white rounded hover:bg-red-600"
+                  >
+                    Remove
+                  </button>
+                </div>
+              ))}
               <button
                 type="button"
-                onClick={() => removeLine(lineIdx)}
-                className="p-2 text-red-600 hover:text-red-800 disabled:opacity-50"
-                disabled={lines.length === 1}
+                onClick={addAnotherProduct}
+                className="mb-4 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
               >
-                <FaTrashAlt />
+                Add Another Product
+              </button>
+              <div className="w-full flex justify-center gap-2 mt-6">
+                <button
+                  type="button"
+                  onClick={() => setShowAdd(false)}
+                  className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                >
+                  Add Products
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Table */}
+      <div className="overflow-x-auto bg-white dark:bg-gray-900 rounded-lg shadow dark:text-white">
+        <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+          <thead className="bg-gray-200 dark:bg-gray-700">
+            <tr>
+              {['Name', 'Description', 'Purchase', 'Qty', 'Selling', 'Supplier', 'Product ID', 'Date', 'Edit/Restock'].map(h => (
+                <th key={h} className="px-4 py-2 text-left text-sm font-semibold dark:bg-gray-900 dark:text-indigo-600">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
+            {paginatedProducts.map((p, index) => (
+              <tr key={p.id}>
+                <td className="px-4 py-2 text-sm">{p.name}</td>
+                <td className="px-4 py-2 text-sm">{p.description}</td>
+                <td className="px-4 py-2 text-sm">
+                  {p.purchase_price != null
+                    ? parseFloat(p.purchase_price).toFixed(2)
+                    : ''}
+                </td>
+                <td className="px-4 py-2 text-sm">{p.purchase_qty}</td>
+                <td className="px-4 py-2 text-sm">
+                  {p.selling_price != null
+                    ? parseFloat(p.selling_price).toFixed(2)
+                    : ''}
+                </td>
+                <td className="px-4 py-2 text-sm">{p.suppliers_name}</td>
+                <td className="px-4 py-2 text-sm">{p.device_id}</td>
+                <td className="px-4 py-2 text-sm">
+                  {new Date(p.created_at).toLocaleDateString()}
+                </td>
+                <td className="px-4 py-2 flex gap-2">
+                  <button onClick={() => startEdit(p)} className={`text-indigo-600 hover:text-indigo-800 edit-button-${index}`}>
+                    <FaEdit />
+                  </button>
+                  <button onClick={() => deleteProduct(p)} className="text-red-600 hover:text-red-800">
+                    <FaTrashAlt />
+                  </button>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* Pagination */}
+      <div className="flex flex-wrap justify-center items-center gap-2 mt-4">
+        <button
+          onClick={() => setCurrentPage(prev => Math.max(prev - 1, 1))}
+          disabled={currentPage === 1}
+          className="px-3 py-1 bg-gray-200 dark:bg-gray-700 rounded disabled:opacity-50"
+        >
+          Prev
+        </button>
+        {[...Array(totalPages)].map((_, i) => (
+          <button
+            key={i}
+            onClick={() => setCurrentPage(i + 1)}
+            className={`px-3 py-1 rounded ${currentPage === i + 1
+              ? 'bg-indigo-600 text-white'
+              : 'bg-gray-200 hover:bg-gray-300'}`}
+          >
+            {i + 1}
+          </button>
+        ))}
+        <button
+          onClick={() => setCurrentPage(prev => Math.min(prev + 1, totalPages))}
+          disabled={currentPage === totalPages}
+          className="px-3 py-1 bg-gray-200 dark:bg-gray-700 rounded disabled:opacity-50"
+        >
+          Next
+        </button>
+      </div>
+
+      {/* Exports */}
+      <div className="flex justify-center gap-4 mt-4">
+        <button onClick={exportCSV} className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700">
+          <FaFileCsv /> CSV
+        </button>
+        <button onClick={exportPDF} className="flex items-center gap-2 px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">
+          <FaFilePdf /> PDF
+        </button>
+      </div>
+
+      {/* Edit Modal */}
+      {editing && (
+        <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 p-4">
+          <div className="bg-white dark:bg-gray-800 p-6 rounded-lg shadow-lg w-full max-w-md overflow-y-auto max-h-[90vh] mt-32">
+            <h2 className="text-xl font-bold mb-4">Edit {editing.name}</h2>
+            {[
+              { name: 'name', label: 'Name' },
+              { name: 'description', label: 'Description' },
+              { name: 'purchase_price', label: 'Total Purchase Price' },
+              { name: 'purchase_qty', label: 'Qty Purchased (Restock)' },
+              { name: 'selling_price', label: 'Selling Price' },
+              { name: 'suppliers_name', label: 'Supplier Name' },
+              { name: 'device_id', label: 'Product ID' },
+            ].map(field => (
+              <div className="mb-3" key={field.name}>
+                <label className="block mb-1">{field.label}</label>
+                <input
+                  type={field.name.includes('price') || field.name.includes('qty') ? 'number' : 'text'}
+                  step="0.01"
+                  name={field.name}
+                  value={form[field.name]}
+                  onChange={handleFormChange}
+                  required={['name', 'purchase_price', 'purchase_qty'].includes(field.name)}
+                  className="w-full p-2 border rounded dark:bg-gray-700 dark:text-white"
+                />
+              </div>
+            ))}
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setEditing(null)} className="px-4 py-2 bg-gray-500 text-white rounded hover:bg-gray-600">
+                Cancel
+              </button>
+              <button onClick={saveEdit} className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700">
+                Save
               </button>
             </div>
           </div>
-
-          <div className="mt-2">
-            <label className="block mb-1 text-sm font-medium">Product IDs and Sizes (Optional)</label>
-           {line.deviceIds.map((id, deviceIdx) => (
-  <div key={`device-${lineIdx}-${deviceIdx}`} className="flex flex-col sm:flex-row gap-2 mb-2">
-    <select
-      value={id}
-      onChange={(e) => handleLineChange(lineIdx, 'deviceIds', e.target.value, deviceIdx)}
-      className="flex-1 p-2 border rounded dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-    >
-      <option value="">Select Product ID (Optional)</option>
-      {(availableDeviceIds[lineIdx]?.deviceIds || []).map((deviceId) => (
-        <option key={deviceId} value={deviceId}>{deviceId}</option>
-      ))}
-    </select>
-    <input
-      type="text"
-      value={id}
-      onChange={(e) => handleLineChange(lineIdx, 'deviceIds', e.target.value, deviceIdx)}
-      placeholder="Or enter Product ID manually"
-      className="flex-1 p-2 border rounded dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-    />
-    <input
-      type="text"
-      value={line.deviceSizes[deviceIdx] || ''}
-      onChange={(e) => handleLineChange(lineIdx, 'deviceSizes', e.target.value, deviceIdx)}
-      placeholder="Enter Product/Goods/Device Size (Optional)"
-      className="flex-1 p-2 border rounded dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-    />
-    <div className="flex gap-1">
-      <button
-        type="button"
-        onClick={() => openScanner('add', lineIdx, deviceIdx)}
-        className="p-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
-        title="Scan Barcode"
-      >
-        <FaCamera />
-      </button>
-      <button
-        type="button"
-        onClick={() => removeDeviceId(lineIdx, deviceIdx)}
-        className="p-2 text-red-600 hover:text-red-800"
-      >
-        <FaTrashAlt />
-      </button>
-    </div>
-  </div>
-))}
-            <button
-              type="button"
-              onClick={(e) => addDeviceId(e, lineIdx)}
-              className="flex items-center gap-1 text-green-600 hover:text-green-800 mt-2"
-            >
-              <FaPlus /> Add Product ID & Size
-            </button>
-          </div>
-        </div>
-      ))}
-
-      <button
-        type="button"
-        onClick={addLine}
-        className="flex items-center gap-1 text-green-600 hover:text-green-800 mb-4"
-      >
-        <FaPlus /> Add Item
-      </button>
-
-      <div className="mb-4">
-        <label className="block mb-1 text-sm font-medium">Payment Method</label>
-        <select
-          value={paymentMethod}
-          onChange={(e) => setPaymentMethod(e.target.value)}
-          className="w-full p-2 border rounded dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-          required
-        >
-          <option value="">Select payment method…</option>
-          <option>Cash</option>
-          <option>Bank Transfer</option>
-          <option>Card</option>
-          <option>Wallet</option>
-        </select>
-      </div>
-
-      <div className="mb-4 text-lg font-semibold">Total: ₦{totalAmount.toFixed(2)}</div>
-
-      <div className="flex flex-col sm:flex-row justify-end gap-2">
-        <button
-          type="button"
-          onClick={() => {
-            stopScanner();
-            setShowAdd(false);
-          }}
-          className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600"
-        >
-          Cancel
-        </button>
-        <button
-          type="submit"
-          className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
-        >
-          Save Sale
-        </button>
-      </div>
-    </form>
-  </div>
-)}
-
-
-
-
-
-      {/* Edit Modal */}
- {editing && (
-  <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-2 sm:p-4 z-50 overflow-y-auto mt-16">
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        saveEdit();
-      }}
-      className="bg-white dark:bg-gray-900 p-4 sm:p-6 rounded-lg shadow-lg w-full max-w-3xl max-h-[90vh] overflow-y-auto mt-16"
-    >
-      <h2 className="text-lg sm:text-xl font-bold mb-4">
-        Edit Sale #{editing}
-      </h2>
-
-      <div className="mb-4">
-        <label className="block mb-1 text-sm font-medium">Product</label>
-        <select
-          name="dynamic_product_id"
-          value={saleForm.dynamic_product_id || ''}
-          onChange={(e) => handleEditChange('dynamic_product_id', e.target.value)}
-          className="w-full p-2 border rounded dark:bg-gray-800 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-          required
-        >
-          <option value="">Select product…</option>
-          {products.map((p) => (
-            <option key={p.id} value={p.id}>{p.name}</option>
-          ))}
-        </select>
-      </div>
-
-      {['quantity', 'unit_price', 'deviceIds', 'deviceSizes', 'payment_method'].map((field) => (
-        <div className="mb-4" key={field}>
-          <label className="block mb-1 text-sm font-medium capitalize">
-            {field.replace('Ids', ' IDs').replace('Sizes', ' Sizes').replace('_', ' ')}
-          </label>
-
-          {field === 'payment_method' ? (
-            <select
-              name={field}
-              value={saleForm[field] || ''}
-              onChange={(e) => handleEditChange(field, e.target.value)}
-              className="w-full p-2 border rounded dark:bg-gray-800 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-              required
-            >
-              <option value="">Select payment method…</option>
-              <option>Cash</option>
-              <option>Bank Transfer</option>
-              <option>Card</option>
-              <option>Wallet</option>
-            </select>
-          ) : field === 'deviceIds' || field === 'deviceSizes' ? (
-            <div>
-              {saleForm.deviceIds.map((id, deviceIdx) => (
-                <div key={`edit-device-${deviceIdx}`} className="flex flex-col sm:flex-row items-stretch gap-2 mb-2">
-                  <select
-                    value={id}
-                    onChange={(e) => handleEditChange('deviceIds', e.target.value, deviceIdx)}
-                    className="flex-1 p-2 border rounded dark:bg-gray-800 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-                  >
-                    <option value="">Select Product ID (Optional)</option>
-                    {(availableDeviceIds[0]?.deviceIds || []).map((deviceId) => (
-                      <option key={deviceId} value={deviceId}>{deviceId}</option>
-                    ))}
-                  </select>
-                  <input
-                    type="text"
-                    value={id}
-                    onChange={(e) => handleEditChange('deviceIds', e.target.value, deviceIdx)}
-                    placeholder="Or enter Product ID manually"
-                    className="flex-1 p-2 border rounded dark:bg-gray-800 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-                  />
-                  <input
-                    type="text"
-                    value={saleForm.deviceSizes[deviceIdx] || ''}
-                    onChange={(e) => handleEditChange('deviceSizes', e.target.value, deviceIdx)}
-                    placeholder="Enter Product size (Optional)"
-                    className="flex-1 p-2 border rounded dark:bg-gray-800 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-                  />
-                  <div className="flex gap-2">
-                    {field === 'deviceIds' && (
-                      <button
-                        type="button"
-                        onClick={() => openScanner('edit', 0, deviceIdx)}
-                        className="p-2 bg-indigo-600 text-white rounded hover:bg-indigo-700"
-                        title="Scan Barcode"
-                      >
-                        <FaCamera />
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() => removeEditDeviceId(deviceIdx)}
-                      className="p-2 text-red-600 hover:text-red-800"
-                    >
-                      <FaTrashAlt />
-                    </button>
-                  </div>
-                </div>
-              ))}
-              {field === 'deviceIds' && (
-                <button
-                  type="button"
-                  onClick={(e) => addEditDeviceId(e)}
-                  className="flex items-center gap-1 text-green-600 hover:text-green-800 text-sm mt-1"
-                >
-                  <FaPlus /> Add Product ID & Size
-                </button>
-              )}
-            </div>
-          ) : (
-            <input
-              type="number"
-              step={field === 'unit_price' ? '0.01' : undefined}
-              name={field}
-              value={saleForm[field] || ''}
-              onChange={(e) => handleEditChange(field, e.target.value)}
-              className="w-full p-2 border rounded dark:bg-gray-800 dark:border-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 text-sm"
-              required
-            />
-          )}
-        </div>
-      ))}
-
-      <div className="flex flex-col sm:flex-row justify-end gap-2 mt-4">
-        <button
-          type="button"
-          onClick={() => {
-            stopScanner();
-            setEditing(null);
-          }}
-          className="w-full sm:w-auto px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600 text-sm"
-        >
-          Cancel
-        </button>
-        <button
-          type="submit"
-          className="w-full sm:w-auto px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 text-sm"
-        >
-          Save
-        </button>
-      </div>
-    </form>
-  </div>
-)}
-
-
-
-      {showDetailModal && (
-  <div className="fixed inset-0 flex items-center justify-center bg-black bg-opacity-50 p-4 z-50">
-    <div className="bg-white dark:bg-gray-900 p-6 rounded-lg shadow-lg w-full max-w-lg max-h-[90vh] overflow-y-auto">
-      <h2 className="text-xl font-semibold mb-6">Product IDs and Sizes</h2>
-      <ul className="mt-2 divide-y divide-gray-200 dark:divide-gray-700">
-        {paginatedDevices.map((device, i) => {
-          const displayText = `ID: ${device.id || '-'} (size: ${device.size || '-'})`;
-          const q = search.trim().toLowerCase();
-          const match = device.id.toLowerCase().includes(q) || device.size.toLowerCase().includes(q);
-          return (
-            <li
-              key={i}
-              className={['py-2 px-4', match ? 'bg-yellow-100 dark:bg-yellow-900' : ''].filter(Boolean).join(' ')}
-            >
-              <span className={match ? 'font-semibold' : ''}>{displayText}</span>
-            </li>
-          );
-        })}
-      </ul>
-      {totalDetailPages > 1 && (
-        <div className="flex justify-between items-center mt-4 text-sm text-gray-700 dark:text-gray-300">
-          <button
-            type="button"
-            onClick={() => setDetailPage(p => Math.max(p - 1, 1))}
-            disabled={detailPage === 1}
-            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-50 dark:bg-gray-700 dark:hover:bg-gray-600"
-          >
-            Previous
-          </button>
-          <span>
-            Page {detailPage} of {totalDetailPages}
-          </span>
-          <button
-            type="button"
-            onClick={() => setDetailPage(p => Math.min(p + 1, totalDetailPages))}
-            disabled={detailPage === totalDetailPages}
-            className="px-3 py-1 rounded bg-gray-200 hover:bg-gray-300 disabled:opacity-50 dark:bg-gray-700 dark:hover:bg-gray-600"
-          >
-            Next
-          </button>
-        </div>
-      )}
-      <div className="flex justify-end mt-4">
-        <button
-          type="button"
-          onClick={() => setShowDetailModal(false)}
-          className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600"
-        >
-          Close
-        </button>
-      </div>
-    </div>
-  </div>
-)}
-
-      {/* Scanner Modal */}
-      {showScanner && (
-        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center p-4 z-50">
-          <div className="bg-white dark:bg-gray-900 p-6 rounded max-w-lg w-full">
-            <h2 className="text-xl font-bold mb-4 text-gray-800 dark:text-white">Scan Product ID</h2>
-            <div className="mb-4">
-              <label className="flex items-center space-x-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-                <input
-                  type="checkbox"
-                  checked={externalScannerMode}
-                  onChange={() => setExternalScannerMode((prev) => !prev)}
-                  className="h-4 w-4 text-indigo-600 border-gray-300 rounded dark:bg-gray-700 dark:border-gray-600"
-                />
-                <span>Use External Barcode Scanner</span>
-              </label>
-            </div>
-            {!externalScannerMode && (
-              <>
-                {scannerLoading && (
-                  <div className="text-gray-600 dark:text-gray-400 mb-4">Initializing webcam scanner...</div>
-                )}
-                {scannerError && (
-                  <div className="text-red-600 dark:text-red-400 mb-4">{scannerError}</div>
-                )}
-                <div
-                  id="scanner"
-                  ref={scannerDivRef}
-                  className="relative w-full h-64 mb-4 bg-gray-100 dark:bg-gray-800"
-                >
-                  <video
-                    ref={videoRef}
-                    className="w-full h-full object-cover"
-                    autoPlay
-                    playsInline
-                  />
-                  <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                    <div className="w-[250px] h-[100px] border-2 border-red-500 bg-transparent opacity-50"></div>
-                  </div>
-                </div>
-              </>
-            )}
-          
-            {externalScannerMode && (
-              <div className="text-gray-600 dark:text-gray-400 mb-4">
-                Waiting for external scanner input... Scan a barcode to proceed.
-              </div>
-            )}
-           <div className="mb-4">
-  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-    Or Enter Product ID Manually
-  </label>
-  
-  <div className="flex flex-col sm:flex-row gap-2">
-    <input
-      type="text"
-      value={manualInput}
-      onChange={(e) => setManualInput(e.target.value)}
-      placeholder="Enter Product ID"
-      className="w-full sm:flex-1 p-2 border rounded dark:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-    />
-    
-    <button
-      type="button"
-      onClick={handleManualInput}
-      className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 w-full sm:w-auto"
-    >
-      Submit
-    </button>
-  </div>
-</div>
-
-<div className="flex justify-end">
-  <button
-    type="button"
-    onClick={() => {
-      setShowScanner(false);
-      setScannerTarget(null);
-      setScannerError(null);
-      setScannerLoading(false);
-      setManualInput('');
-      setExternalScannerMode(false);
-      stopScanner();
-    }}
-    className="px-4 py-2 bg-gray-200 rounded hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600"
-  >
-    Cancel
-  </button>
-</div>
-
-          </div>
         </div>
       )}
 
-      {/* Sales Table */}
-      <div className="overflow-x-auto rounded-lg shadow">
-           
-         {viewMode === 'list' ? (
-           <table className="min-w-full bg-white dark:bg-gray-900 divide-y divide-gray-200">
-             <thead className="bg-gray-100 dark:bg-gray-800">
-               <tr>
-                 {['Product', 'Quantity', 'Unit Price', 'Amount', 'Payment', 'Product IDs/Sizes', 'Date Sold', 'Actions'].map((h) => (
-                   <th
-                     key={h}
-                     className="px-4 py-2 text-left text-sm font-semibold text-gray-700 dark:text-gray-200"
-                   >
-                     {h}
-                   </th>
-                 ))}
-               </tr>
-             </thead>
-             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-               {paginatedSales.map((s, idx) => (
-                 <tr key={s.id}>
-                   <td className="px-4 py-2 text-sm">{s.dynamic_product.name}</td>
-                   <td className="px-4 py-2 text-sm">{s.quantity}</td>
-                   <td className="px-4 py-2 text-sm">₦{formatCurrency(s.unit_price)}</td>
-                   <td className="px-4 py-2 text-sm">₦{formatCurrency(s.amount)}</td>
-                   <td className="px-4 py-2 text-sm">{s.payment_method}</td>
-                   <td className="px-4 py-2 text-sm">
-                     {s.deviceIds.length > 0 ? (
-                       <button
-                         type="button"
-                         onClick={() => openDetailModal(s)}
-                         className="text-indigo-600 hover:underline focus:outline-none"
-                       >
-                         View {s.deviceIds.length} ID{s.deviceIds.length !== 1 ? 's' : ''}
-                       </button>
-                     ) : (
-                       '-'
-                     )}
-                   </td>
-                   <td className="px-4 py-2 text-sm">{new Date(s.sold_at).toLocaleString()}</td>
-                   <td className="px-4 py-2 text-sm flex gap-2">
-                   <button
-  type="button"
-  onClick={() => {
-    setEditing(s.id);
-    setSaleForm({
-      dynamic_product_id: s.dynamic_product_id,
-      quantity: s.quantity,
-      unit_price: s.unit_price,
-      deviceIds: s.deviceIds.length > 0 ? s.deviceIds : [''],
-      deviceSizes: s.deviceSizes.length > 0 ? s.deviceSizes : [''],
-      payment_method: s.payment_method,
-      isQuantityManual: false,
-    });
-    const product = products.find(p => p.id === s.dynamic_product_id);
-    if (product) {
-      checkSoldDevices(product.deviceIds, s.dynamic_product_id, 0);
-    }
-  }}
-  className={`p-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 edit-button-${idx}`}
-  title="Edit sale"
->
-  <FaEdit />
-</button>
-                     <button
-                       type="button"
-                       onClick={() => deleteSale(s)}
-                       className="p-2 bg-red-500 text-white rounded hover:bg-red-600"
-                       title="Delete sale"
-                     >
-                       <FaTrashAlt />
-                     </button>
-                   </td>
-                 </tr>
-               ))}
-             </tbody>
-           </table>
-         ) : (
-           <table className="min-w-full bg-white dark:bg-gray-900 divide-y divide-gray-200">
-             <thead className="bg-gray-100 dark:bg-gray-800">
-               <tr>
-                 <th className="px-4 py-2 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Period</th>
-                 <th className="px-4 py-2 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Total Sales (₦)</th>
-                 <th className="px-4 py-2 text-left text-sm font-semibold text-gray-700 dark:text-gray-200">Number of Sales</th>
-               </tr>
-             </thead>
-             <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-               {paginatedTotals.map((t, idx) => (
-                 <tr key={idx}>
-                   <td className="px-4 py-2 text-sm">{t.period}</td>
-                   <td className="px-4 py-2 text-sm">₦{formatCurrency(t.total)}</td>
-                   <td className="px-4 py-2 text-sm">{t.count}</td>
-                 </tr>
-               ))}
-             </tbody>
-           </table>
-         )}
-       </div>
-
-        {/* Pagination */}
-        <div className="flex flex-wrap justify-center items-center gap-2 mt-4">
-          <button
-            type="button"
-            onClick={() => setCurrentPage((prev) => Math.max(prev - 1, 1))}
-            disabled={currentPage === 1}
-            className="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300 disabled:opacity-50 dark:bg-gray-700 dark:hover:bg-gray-600 transition"
-          >
-            Prev
-          </button>
-          {[...Array(totalPages).keys()].map((i) => (
-            <button
-              type="button"
-              key={i}
-              onClick={() => setCurrentPage(i + 1)}
-              className={`px-3 py-1 rounded transition ${
-                currentPage === i + 1
-                  ? 'bg-indigo-600 text-white'
-                  : 'bg-gray-200 hover:bg-gray-300 dark:bg-gray-700 dark:hover:bg-gray-600'
-                }`}
-            >
-              {i + 1}
-            </button>
-          ))}
-          <button
-            type="button"
-            onClick={() => setCurrentPage((prev) => Math.min(prev + 1, totalPages))}
-            disabled={currentPage === totalPages}
-            className="px-3 py-1 bg-gray-200 rounded hover:bg-gray-300 disabled:opacity-50 dark:bg-gray-600 dark:hover:bg-gray-700 transition"
-          >
-            Next
-          </button>
-        </div>
-
-        {/* Export Buttons */}
-        <div className="flex flex-wrap justify-center items-center gap-3 mt-4">
-          <button
-            type="button"
-            onClick={exportCSV}
-            className="flex items-center justify-center gap-2 w-full sm:w-44 px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition export-csv-button"
-            title="Export to CSV"
-          >
-            <FaFileCsv className="w-4 h-4" />
-            <span>Export CSV</span>
-          </button>
-          <button
-            onClick={exportPDF}
-            className="flex items-center justify-center gap-2 w-full sm:w-44 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition export-pdf-button"
-            title="Export to PDF"
-          >
-            <FaFilePdf className="w-4 h-4" />
-            <span>Export PDF</span>
-          </button>
-        </div>
-
-        {/* Onboarding Tooltip */}
-        {showOnboarding && onboardingStep < onboardingSteps.length && (
-          <motion.div
-            className="fixed z-50 bg-indigo-700 dark:bg-indigo-900 border border-indigo-300 dark:border-indigo-600 rounded-lg shadow-lg p-4 max-w-xs"
-            style={getTooltipPosition(onboardingSteps[onboardingStep].target)}
-            variants={tooltipVariants}
-            initial="hidden"
-            animate="visible"
-          >
-            <p className="text-sm text-white dark:text-gray-100 mb-2">
-              {onboardingSteps[onboardingStep].content}
-            </p>
-            <div className="flex justify-between items-center">
-              <div>
-                <span className="text-sm text-gray-300 dark:text-gray-400">
-                  Step ${onboardingStep + 1} of ${totalOnboardingSteps.length}
-                </span>
-                <div className="space-x-3">
-                  <button
-                    type="button"
-                    onClick={handleSkipOnboarding}
-                    className="text-sm text-white dark:text-gray-300 hover:text-gray-200 px-2 py-1"
-                  >
-                    Skip
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleNextStep}
-                    className="bg-green-600 hover:bg-green-700 text-white text-sm px-3 py-1 rounded"
-                  >
-                    {onboardingStep + 1 === onboardingSteps.length ? 'Finish' : 'Next'}
-                  </button>
-                </div>
-              </div>
+      {/* Onboarding Tooltip */}
+      {showOnboarding && onboardingStep < onboardingSteps.length && (
+        <motion.div
+          className="fixed z-50  bg-indigo-600 dark:bg-gray-900 border rounded-lg shadow-lg p-4 max-w-xs"
+          style={getTooltipPosition(onboardingSteps[onboardingStep].target)}
+          variants={tooltipVariants}
+          initial="hidden"
+          animate="visible"
+        >
+          <p className="text-sm text-white dark:text-gray-300 mb-2">
+            {onboardingSteps[onboardingStep].content}
+          </p>
+          <div className="flex justify-between items-center">
+            <span className="text-sm text-gray-200">
+              Step {onboardingStep + 1} of {onboardingSteps.length}
+            </span>
+            <div className="space-x-2">
+              <button
+                onClick={handleSkipOnboarding}
+                className="text-sm text-gray-300 hover:text-gray-800 dark:text-gray-300"
+              >
+                Skip
+              </button>
+              <button
+                onClick={handleNextStep}
+                className="bg-indigo-600 hover:bg-indigo-700 text-white py-1 px-3 rounded"
+              >
+                {onboardingStep + 1 === onboardingSteps.length ? 'Finish' : 'Next'}
+              </button>
             </div>
-          </motion.div>
-        )}
-      </div>
-    );
+          </div>
+        </motion.div>
+      )}
+    </div>
+  );
 }

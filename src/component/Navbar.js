@@ -57,7 +57,7 @@ const Navbar = () => {
           <div className="flex items-center">
       <RouterLink to="/" aria-label="Sellytics Home">
         <motion.img
-          src="/new.png"
+          src="/arrow.png"
           alt="Sellytics Logo"
           className="h-16 sm:h-20 md:h-28 w-auto min-h-[48px] max-h-[80%] max-w-[80%]"
           whileHover={{ scale: 1.05 }}
@@ -68,7 +68,7 @@ const Navbar = () => {
 
           {/* Desktop Navigation */}
           <motion.div
-            className="hidden md:flex items-center space-x-8 text-gray-700 dark:text-gray-300 font-sans"
+            className="hidden md:flex items-center space-x-12 text-gray-700 dark:text-gray-300 font-sans"
             variants={linkVariants}
             initial="hidden"
             animate="visible"
