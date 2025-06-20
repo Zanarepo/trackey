@@ -55,16 +55,16 @@ const Navbar = () => {
         <div className="flex items-center justify-between px-6 md:px-8 h-20">
           {/* Logo Section */}
           <div className="flex items-center">
-            <RouterLink to="/" aria-label="Sellytics Home">
-              <motion.img
-                src="/Sellytics.jpg"
-                alt="Sellytics Logo"
-                className="h-16 md:h-20 w-auto"
-                whileHover={{ scale: 1.05 }}
-                transition={{ type: 'spring', stiffness: 300 }}
-              />
-            </RouterLink>
-          </div>
+      <RouterLink to="/" aria-label="Sellytics Home">
+        <motion.img
+          src="/new.png"
+          alt="Sellytics Logo"
+          className="h-16 sm:h-20 md:h-28 w-auto min-h-[48px] max-h-[80%] max-w-[80%]"
+          whileHover={{ scale: 1.05 }}
+          transition={{ type: 'spring', stiffness: 300 }}
+        />
+      </RouterLink>
+    </div>
 
           {/* Desktop Navigation */}
           <motion.div
