@@ -758,102 +758,116 @@ const formatCurrency = (value) =>
   };
 
   const saveEdit = async () => {
-    if (!editForm.name.trim()) {
-      toast.error('Product name is required');
+  if (!editForm.name.trim()) {
+    toast.error('Product name is required');
+    return;
+  }
+
+  const cleanedDeviceIds = editForm.deviceIds
+    .filter((id) => id && id.trim())
+    .map((id) => id.trim());
+  if (cleanedDeviceIds.length === 0) {
+    toast.error('At least one Device ID is required');
+    return;
+  }
+
+  // Ensure deviceSizes is aligned with cleanedDeviceIds
+  const cleanedDeviceSizes = Array(cleanedDeviceIds.length)
+    .fill('')
+    .map((_, i) => (editForm.deviceSizes[i] || '').trim());
+
+  console.log('Saving edit:', {
+    deviceIds: cleanedDeviceIds,
+    deviceSizes: cleanedDeviceSizes,
+    idsLength: cleanedDeviceIds.length,
+    sizesLength: cleanedDeviceSizes.length,
+  });
+
+  try {
+    const uniqueIds = new Set(cleanedDeviceIds.map((id) => id.toLowerCase()));
+    if (uniqueIds.size < cleanedDeviceIds.length) {
+      toast.error('Duplicate Device IDs detected within this product');
       return;
     }
 
-    const cleanedDeviceIds = editForm.deviceIds
+    const { data: existingProducts, error: fetchError } = await supabase
+      .from('dynamic_product')
+      .select('id, dynamic_product_imeis')
+      .eq('store_id', storeId)
+      .neq('id', editing.id);
+    if (fetchError) throw fetchError;
+
+    const existingIds = existingProducts
+      .flatMap((p) =>
+        p.dynamic_product_imeis ? p.dynamic_product_imeis.split(',').map((id) => id.trim()) : []
+      )
+      .filter((id) => id);
+    const duplicates = cleanedDeviceIds.filter((id) => existingIds.some((eId) => eId.toLowerCase() === id.toLowerCase()));
+    if (duplicates.length > 0) {
+      toast.error(`Device IDs already exist in other products: ${duplicates.join(', ')}`);
+      return;
+    }
+
+    // Calculate new device IDs by comparing with original deviceIds
+    const originalDeviceIds = editing.deviceIds
       .filter((id) => id && id.trim())
       .map((id) => id.trim());
-    if (cleanedDeviceIds.length === 0) {
-      toast.error('At least one Device ID is required');
-      return;
-    }
+    const newDeviceIds = cleanedDeviceIds.filter(
+      (id) => !originalDeviceIds.includes(id)
+    );
+    const newQty = newDeviceIds.length;
 
-    // Ensure deviceSizes is aligned with cleanedDeviceIds
-    const cleanedDeviceSizes = Array(cleanedDeviceIds.length)
-      .fill('')
-      .map((_, i) => (editForm.deviceSizes[i] || '').trim());
+    // Update dynamic_product table with all device IDs
+    const { error: prodErr } = await supabase
+      .from('dynamic_product')
+      .update({
+        name: editForm.name,
+        description: editForm.description || '',
+        purchase_price: parseFloat(editForm.purchase_price) || 0,
+        purchase_qty: cleanedDeviceIds.length, // Total device IDs for dynamic_product
+        selling_price: parseFloat(editForm.selling_price) || 0,
+        suppliers_name: editForm.suppliers_name || '',
+        dynamic_product_imeis: cleanedDeviceIds.join(','),
+        device_size: cleanedDeviceSizes.join(','),
+      })
+      .eq('id', editing.id);
+    if (prodErr) throw prodErr;
 
-    console.log('Saving edit:', {
-      deviceIds: cleanedDeviceIds,
-      deviceSizes: cleanedDeviceSizes,
-      idsLength: cleanedDeviceIds.length,
-      sizesLength: cleanedDeviceSizes.length,
-    });
+    // Fetch current inventory
+    const { data: inv, error: invError } = await supabase
+      .from('dynamic_inventory')
+      .select('available_qty, quantity_sold')
+      .eq('dynamic_product_id', editing.id)
+      .eq('store_id', storeId)
+      .maybeSingle();
+    if (invError) throw invError;
 
-    try {
-      const uniqueIds = new Set(cleanedDeviceIds.map((id) => id.toLowerCase()));
-      if (uniqueIds.size < cleanedDeviceIds.length) {
-        toast.error('Duplicate Product IDs detected within this product');
-        return;
-      }
+    // Increment available_qty by new device IDs only
+    const currentAvailQty = inv?.available_qty || 0;
+    const updatedAvailQty = currentAvailQty + newQty;
 
-      const { data: existingProducts, error: fetchError } = await supabase
-        .from('dynamic_product')
-        .select('id, dynamic_product_imeis')
-        .eq('store_id', storeId)
-        .neq('id', editing.id);
-      if (fetchError) throw fetchError;
+    await supabase
+      .from('dynamic_inventory')
+      .upsert(
+        {
+          dynamic_product_id: editing.id,
+          store_id: storeId,
+          available_qty: updatedAvailQty,
+          quantity_sold: inv?.quantity_sold || 0,
+          last_updated: new Date().toISOString(),
+        },
+        { onConflict: ['dynamic_product_id', 'store_id'] }
+      );
 
-      const existingIds = existingProducts
-        .flatMap((p) =>
-          p.dynamic_product_imeis ? p.dynamic_product_imeis.split(',').map((id) => id.trim()) : []
-        )
-        .filter((id) => id);
-      const duplicates = cleanedDeviceIds.filter((id) => existingIds.some((eId) => eId.toLowerCase() === id.toLowerCase()));
-      if (duplicates.length > 0) {
-        toast.error(`Product IDs already exist in other products: ${duplicates.join(', ')}`);
-        return;
-      }
-
-      const { error: prodErr } = await supabase
-        .from('dynamic_product')
-        .update({
-          name: editForm.name,
-          description: editForm.description || '',
-          purchase_price: parseFloat(editForm.purchase_price) || 0,
-          purchase_qty: cleanedDeviceIds.length,
-          selling_price: parseFloat(editForm.selling_price) || 0,
-          suppliers_name: editForm.suppliers_name || '',
-          dynamic_product_imeis: cleanedDeviceIds.join(','),
-          device_size: cleanedDeviceSizes.join(','),
-        })
-        .eq('id', editing.id);
-      if (prodErr) throw prodErr;
-
-      const { data: inv } = await supabase
-        .from('dynamic_inventory')
-        .select('available_qty, quantity_sold')
-        .eq('dynamic_product_id', editing.id)
-        .eq('store_id', storeId)
-        .maybeSingle();
-
-      const newAvail = cleanedDeviceIds.length;
-
-      await supabase
-        .from('dynamic_inventory')
-        .upsert(
-          {
-            dynamic_product_id: editing.id,
-            store_id: storeId,
-            available_qty: newAvail,
-            quantity_sold: inv?.quantity_sold || 0,
-            last_updated: new Date().toISOString(),
-          },
-          { onConflict: ['dynamic_product_id', 'store_id'] }
-        );
-
-      toast.success('Product updated successfully');
-      stopScanner();
-      setEditing(null);
-      fetchProducts();
-    } catch (error) {
-      console.error('Save edit error:', error);
-      toast.error('Failed to update product');
-    }
-  };
+    toast.success('Product updated successfully');
+    stopScanner();
+    setEditing(null);
+    fetchProducts();
+  } catch (error) {
+    console.error('Save edit error:', error);
+    toast.error('Failed to update product');
+  }
+};
 
   // Delete
 

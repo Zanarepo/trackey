@@ -1538,7 +1538,7 @@ export default function SalesTracker() {
           </button>
           <button
             onClick={exportPDF}
-            className="flex items-center justify-center gap-2 w-full sm:w-44 px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition export-pdf-button"
+            className="flex items-center justify-center gap-2 w-full sm:w-44 px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 transition export-pdf-button"
             title="Export to PDF"
           >
             <FaFilePdf className="w-4 h-4" />
