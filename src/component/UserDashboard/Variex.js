@@ -39,7 +39,7 @@ const tools = [
     key: 'sales',
     label: 'Sales Tracker',
     icon: <FaChartLine className="text-5xl sm:text-6xl text-indigo-600" />,
-    desc: 'Analyze your sales performance.',
+    desc: 'Add your sales and see how your business is doing.',
     component: <DynamicSales />,
   },
   
@@ -51,14 +51,14 @@ const tools = [
     key: 'products',
     label: 'Products & Pricing',
     icon: <FaBoxes className="text-5xl sm:text-6xl text-indigo-600" />,
-    desc: 'Manage your product catalog.',
+    desc: 'Add and manage your store’s products, prices, and stock here.',
     component: <DynamicProducts />,
   },
   {
     key: 'inventory',
-    label: 'Manage Inventory (Stocks)',
+    label: 'Manage Inventory (Goods)',
     icon: <FaTasks className="text-5xl sm:text-6xl text-indigo-600" />,
-    desc: 'Track stock levels.',
+    desc: 'Keep an eye on how much goods you have sold and what is left in your store.',
     component: <DynamicInventory />,
   },
 
@@ -84,7 +84,7 @@ const tools = [
     key: 'expenses',
     label: 'Expenses Tracker',
     icon: <FaRegMoneyBillAlt className="text-5xl sm:text-6xl text-indigo-600" />,
-    desc: 'Monitor store expenses.',
+    desc: 'Keep track of your stores spending..',
     component: <ExpenseTracker />,
   },
 
@@ -92,7 +92,7 @@ const tools = [
     key: 'unpaid supplies',
     label: 'Unpaid Supplies',
     icon: <FaBoxOpen className="text-5xl sm:text-6xl text-indigo-600" />,
-    desc: 'Track unpaid supplies.',
+    desc: 'See who took goods on credit and hasn’t paid yet',
     component: <Unpaidsupplies />,
   },
 
