@@ -1234,7 +1234,7 @@ const handleLineChange = async (lineIdx, field, value, deviceIdx = null, isBlur 
 
   // Render
  return (
-  <div className="p-0 max-w-7xl mx-auto dark:bg-gray-900 dark:text-white p-4">
+  <div className="p-0 max-w-7xl mx-auto dark:bg-gray-900 dark:text-white p-0">
     {/* Header */}
     <div className="flex flex-col gap-3 mb-4 px-4 sm:px-0">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 w-full">
